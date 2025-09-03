@@ -3,7 +3,8 @@ package com.inyo.ducklake.connect;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.ConfigDef;
 
-import java.util.Map;
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class DucklakeSinkConfig extends AbstractConfig {
 
@@ -24,6 +25,11 @@ public class DucklakeSinkConfig extends AbstractConfig {
     static final String S3_ENDPOINT = "s3.endpoint";
     static final String S3_ACCESS_KEY_ID = "s3.access_key_id";
     static final String S3_SECRET_ACCESS_KEY = "s3._secret_access_key";
+
+    // Table-specific configuration property patterns
+    static final String TABLE_ID_COLUMNS_PATTERN = "ducklake.table.%s.id-columns";
+    static final String TABLE_PARTITION_BY_PATTERN = "ducklake.table.%s.partition-by";
+    static final String TABLE_AUTO_CREATE_PATTERN = "ducklake.table.%s.auto-create";
 
 
     private static ConfigDef newConfigDef() {
@@ -84,5 +90,93 @@ public class DucklakeSinkConfig extends AbstractConfig {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    /**
+     * Gets the ID columns for a specific table.
+     *
+     * @param tableName the name of the table
+     * @return array of ID column names, empty array if not configured
+     */
+    public String[] getTableIdColumns(String tableName) {
+        String propertyKey = String.format(TABLE_ID_COLUMNS_PATTERN, tableName);
+        String value = getString(propertyKey);
+
+        if (value == null || value.trim().isEmpty()) {
+            return new String[0];
+        }
+
+        return Arrays.stream(value.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toArray(String[]::new);
+    }
+
+    /**
+     * Gets the partition-by columns for a specific table.
+     *
+     * @param tableName the name of the table
+     * @return array of partition column names, empty array if not configured
+     */
+    public String[] getTablePartitionByColumns(String tableName) {
+        String propertyKey = String.format(TABLE_PARTITION_BY_PATTERN, tableName);
+        String value = getString(propertyKey);
+
+        if (value == null || value.trim().isEmpty()) {
+            return new String[0];
+        }
+
+        return Arrays.stream(value.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toArray(String[]::new);
+    }
+
+    /**
+     * Gets the auto-create setting for a specific table.
+     *
+     * @param tableName the name of the table
+     * @return true if auto-create is enabled, false otherwise (default)
+     */
+    public boolean getTableAutoCreate(String tableName) {
+        String propertyKey = String.format(TABLE_AUTO_CREATE_PATTERN, tableName);
+        return getBoolean(propertyKey);
+    }
+
+    /**
+     * Gets all table names that have been configured with table-specific properties.
+     *
+     * @return set of configured table names
+     */
+    public Set<String> getConfiguredTableNames() {
+        Set<String> tableNames = new HashSet<>();
+
+        // Extract table names from all table-specific properties
+        for (String key : originals().keySet()) {
+            if (key.startsWith("ducklake.table.")) {
+                String[] parts = key.split("\\.");
+                if (parts.length >= 3) {
+                    tableNames.add(parts[2]);
+                }
+            }
+        }
+
+        return tableNames;
+    }
+
+    /**
+     * Checks if a table has any specific configuration.
+     *
+     * @param tableName the name of the table
+     * @return true if the table has specific configuration
+     */
+    public boolean hasTableConfiguration(String tableName) {
+        String idColumnsKey = String.format(TABLE_ID_COLUMNS_PATTERN, tableName);
+        String partitionByKey = String.format(TABLE_PARTITION_BY_PATTERN, tableName);
+        String autoCreateKey = String.format(TABLE_AUTO_CREATE_PATTERN, tableName);
+
+        return originals().containsKey(idColumnsKey) ||
+               originals().containsKey(partitionByKey) ||
+               originals().containsKey(autoCreateKey);
     }
 }
