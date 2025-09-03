@@ -16,6 +16,9 @@ public class DucklakeConnectionFactory {
     }
 
     public void create() throws SQLException {
+        if (this.conn != null) {
+            return;
+        }
         final Properties properties = new Properties();
         properties.setProperty("s3_url_style", config.getS3UrlStyle());
         properties.setProperty("s3_use_ssl", config.getS3UseSsl());
@@ -23,18 +26,37 @@ public class DucklakeConnectionFactory {
         properties.setProperty("s3_access_key_id", config.getS3AccessKeyId());
         properties.setProperty("s3_secret_access_key", config.getS3SecretAccessKey());
         properties.setProperty("threads", "1");
-        this.conn =  (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
+        this.conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
         final String statement = String.format(
                 "ATTACH IF NOT EXISTS 'ducklake:%s' AS lake (DATA_PATH '%s');",
                 config.getDucklakeCatalogUri(),
                 config.getDataPath()
-
         );
-        conn.createStatement().execute(statement);
+        try (var st = conn.createStatement()) {
+            st.execute(statement);
+        }
     }
 
     public DuckDBConnection getConnection() {
-        return conn;
+        if (conn == null) {
+            throw new IllegalStateException("Connection not initialized. Call create() first.");
+        }
+        try {
+            return (DuckDBConnection) conn.duplicate();
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to duplicate DuckDB connection", e);
+        }
     }
 
+    public void close() {
+        if (conn != null) {
+            try {
+                conn.close();
+            } catch (SQLException e) {
+                throw new RuntimeException("Failed to close DuckDB connection", e);
+            } finally {
+                conn = null;
+            }
+        }
+    }
 }

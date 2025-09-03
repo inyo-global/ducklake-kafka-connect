@@ -165,13 +165,18 @@ class KafkaSchemaToArrowTest {
             Field metadataField = arrowSchema.getFields().get(1);
             assertEquals("metadata", metadataField.getName());
             assertEquals(new ArrowType.Map(true), metadataField.getType());
-            assertEquals(2, metadataField.getChildren().size());
+            // New Arrow map layout: one child struct named 'entries'
+            assertEquals(1, metadataField.getChildren().size());
+            Field entries = metadataField.getChildren().get(0);
+            assertEquals("entries", entries.getName());
+            assertEquals(ArrowType.Struct.INSTANCE, entries.getType());
+            assertEquals(2, entries.getChildren().size());
 
-            Field keyField = metadataField.getChildren().get(0);
+            Field keyField = entries.getChildren().get(0);
             assertEquals("key", keyField.getName());
             assertEquals(ArrowType.Utf8.INSTANCE, keyField.getType());
 
-            Field valueField = metadataField.getChildren().get(1);
+            Field valueField = entries.getChildren().get(1);
             assertEquals("value", valueField.getName());
             assertEquals(ArrowType.Utf8.INSTANCE, valueField.getType());
         }
@@ -293,8 +298,18 @@ class KafkaSchemaToArrowTest {
             Field configField = arrowSchema.getFields().get(1);
             assertEquals("config", configField.getName());
             assertEquals(new ArrowType.Map(true), configField.getType());
+            assertEquals(1, configField.getChildren().size());
 
-            Field valueField = configField.getChildren().get(1);
+            Field entries = configField.getChildren().get(0);
+            assertEquals("entries", entries.getName());
+            assertEquals(ArrowType.Struct.INSTANCE, entries.getType());
+            assertEquals(2, entries.getChildren().size());
+
+            Field keyField = entries.getChildren().get(0);
+            assertEquals("key", keyField.getName());
+            assertEquals(ArrowType.Utf8.INSTANCE, keyField.getType());
+
+            Field valueField = entries.getChildren().get(1);
             assertEquals("value", valueField.getName());
             assertEquals(ArrowType.Struct.INSTANCE, valueField.getType());
             assertEquals(2, valueField.getChildren().size());

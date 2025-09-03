@@ -3,12 +3,16 @@ package com.inyo.ducklake.connect;
 import com.inyo.ducklake.ingestor.ArrowSchemaMerge;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.*;
+import org.apache.arrow.vector.complex.StructVector;
+import org.apache.arrow.vector.complex.ListVector;
+import org.apache.arrow.vector.complex.MapVector;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.sink.SinkRecord;
 
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -165,7 +169,7 @@ public class SinkRecordToArrowConverter {
 
             FieldVector vector = vectorMap.get(fieldName);
             if (vector != null) {
-                setVectorValue(vector, rowIndex, value, kafkaField.schema().type());
+                setVectorValue(vector, rowIndex, value, kafkaField.schema());
             }
         }
 
@@ -187,71 +191,106 @@ public class SinkRecordToArrowConverter {
         }
     }
 
-    private void setVectorValue(FieldVector vector, int index, Object value,
-                               org.apache.kafka.connect.data.Schema.Type type) {
+    private void setVectorValue(FieldVector vector, int index, Object value, org.apache.kafka.connect.data.Schema kafkaSchema) {
         if (value == null) {
             vector.setNull(index);
             return;
         }
-
+        final var type = kafkaSchema.type();
         try {
             switch (type) {
-                case INT8:
-                    ((TinyIntVector) vector).set(index, ((Number) value).byteValue());
-                    break;
-                case INT16:
-                    ((SmallIntVector) vector).set(index, ((Number) value).shortValue());
-                    break;
-                case INT32:
-                    ((IntVector) vector).set(index, ((Number) value).intValue());
-                    break;
-                case INT64:
-                    ((BigIntVector) vector).set(index, ((Number) value).longValue());
-                    break;
-                case FLOAT32:
-                    ((Float4Vector) vector).set(index, ((Number) value).floatValue());
-                    break;
-                case FLOAT64:
-                    ((Float8Vector) vector).set(index, ((Number) value).doubleValue());
-                    break;
-                case BOOLEAN:
-                    ((BitVector) vector).set(index, (Boolean) value ? 1 : 0);
-                    break;
-                case STRING:
-                    ((VarCharVector) vector).set(index, value.toString().getBytes());
-                    break;
-                case BYTES:
-                    if (value instanceof byte[]) {
-                        ((VarBinaryVector) vector).set(index, (byte[]) value);
+                case INT8 -> ((TinyIntVector) vector).set(index, ((Number) value).byteValue());
+                case INT16 -> ((SmallIntVector) vector).set(index, ((Number) value).shortValue());
+                case INT32 -> ((IntVector) vector).set(index, ((Number) value).intValue());
+                case INT64 -> ((BigIntVector) vector).set(index, ((Number) value).longValue());
+                case FLOAT32 -> ((Float4Vector) vector).set(index, ((Number) value).floatValue());
+                case FLOAT64 -> ((Float8Vector) vector).set(index, ((Number) value).doubleValue());
+                case BOOLEAN -> ((BitVector) vector).set(index, (Boolean) value ? 1 : 0);
+                case STRING -> ((VarCharVector) vector).set(index, value.toString().getBytes(StandardCharsets.UTF_8));
+                case BYTES -> {
+                    if (value instanceof byte[] bytes) {
+                        ((VarBinaryVector) vector).set(index, bytes);
                     } else {
                         LOG.log(System.Logger.Level.WARNING, "Expected byte[] for BYTES type, got: {0}", value.getClass());
                         vector.setNull(index);
                     }
-                    break;
-                case STRUCT:
-                    // TODO: Handle nested struct types
-                    LOG.log(System.Logger.Level.WARNING, "Nested STRUCT types not yet supported");
-                    vector.setNull(index);
-                    break;
-                case ARRAY:
-                    // TODO: Handle array types
-                    LOG.log(System.Logger.Level.WARNING, "ARRAY types not yet supported");
-                    vector.setNull(index);
-                    break;
-                case MAP:
-                    // TODO: Handle map types
-                    LOG.log(System.Logger.Level.WARNING, "MAP types not yet supported");
-                    vector.setNull(index);
-                    break;
-                default:
+                }
+                case STRUCT -> handleStructValue(vector, index, value, kafkaSchema);
+                case ARRAY -> handleArrayValue(vector, index, value, kafkaSchema);
+                case MAP -> handleMapValue(vector, index, value, kafkaSchema);
+                default -> {
                     LOG.log(System.Logger.Level.WARNING, "Unsupported field type for vector population: {0}", type);
                     vector.setNull(index);
+                }
             }
         } catch (Exception e) {
-            LOG.log(System.Logger.Level.ERROR,
-                "Error setting vector value at index {0} for type {1}: {2}",
-                index, type, e.getMessage());
+            LOG.log(System.Logger.Level.ERROR, "Error setting vector value at index {0} for type {1}: {2}", index, type, e.getMessage());
             vector.setNull(index);
         }
+    }
+
+    private void handleStructValue(FieldVector vector, int index, Object value, org.apache.kafka.connect.data.Schema kafkaSchema) {
+        if (!(value instanceof Struct struct) || !(vector instanceof StructVector structVector)) {
+            LOG.log(System.Logger.Level.WARNING, "STRUCT value/vector mismatch at index {0}", index);
+            vector.setNull(index);
+            return;
+        }
+        structVector.setIndexDefined(index);
+        for (org.apache.kafka.connect.data.Field childField : kafkaSchema.fields()) {
+            Object childVal = struct.get(childField.name());
+            FieldVector childVector = structVector.getChild(childField.name());
+            if (childVector != null) {
+                setVectorValue(childVector, index, childVal, childField.schema());
+            }
+        }
+    }
+
+    private void handleArrayValue(FieldVector vector, int index, Object value, org.apache.kafka.connect.data.Schema kafkaSchema) {
+        if (!(vector instanceof ListVector) || !(value instanceof Collection<?> coll)) {
+            LOG.log(System.Logger.Level.WARNING, "ARRAY value/vector mismatch at index {0}", index);
+            vector.setNull(index);
+            return;
+        }
+        ListVector listVector = (ListVector) vector;
+        listVector.startNewValue(index);
+        FieldVector dataVector = listVector.getDataVector();
+        org.apache.kafka.connect.data.Schema elemSchema = kafkaSchema.valueSchema();
+        int elementsAdded = 0;
+        for (Object elem : coll) {
+            int elemIndex = dataVector.getValueCount();
+            setVectorValue(dataVector, elemIndex, elem, elemSchema);
+            dataVector.setValueCount(elemIndex + 1);
+            elementsAdded++;
+        }
+        listVector.endValue(index, elementsAdded);
+    }
+
+    private void handleMapValue(FieldVector vector, int index, Object value, org.apache.kafka.connect.data.Schema kafkaSchema) {
+        if (!(vector instanceof MapVector) || !(value instanceof Map<?,?> mapVal)) {
+            LOG.log(System.Logger.Level.WARNING, "MAP value/vector mismatch at index {0}", index);
+            vector.setNull(index);
+            return;
+        }
+        MapVector mapVector = (MapVector) vector;
+        mapVector.startNewValue(index);
+        StructVector entryStruct = (StructVector) mapVector.getDataVector();
+        org.apache.kafka.connect.data.Schema keySchema = kafkaSchema.keySchema();
+        org.apache.kafka.connect.data.Schema valSchema = kafkaSchema.valueSchema();
+        int pairsAdded = 0;
+        for (var e : mapVal.entrySet()) {
+            int entryIndex = entryStruct.getValueCount();
+            entryStruct.setIndexDefined(entryIndex);
+            FieldVector keyVector = entryStruct.getChild("key");
+            FieldVector valVector = entryStruct.getChild("value");
+            if (keyVector != null) {
+                setVectorValue(keyVector, entryIndex, e.getKey(), keySchema);
+            }
+            if (valVector != null) {
+                setVectorValue(valVector, entryIndex, e.getValue(), valSchema);
+            }
+            entryStruct.setValueCount(entryIndex + 1);
+            pairsAdded++;
+        }
+        mapVector.endValue(index, pairsAdded);
     }
 }

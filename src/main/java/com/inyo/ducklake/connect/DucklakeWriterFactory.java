@@ -6,7 +6,7 @@ import org.duckdb.DuckDBConnection;
 
 import java.sql.SQLException;
 
-public class DucklakeWriterFactory {
+public final class DucklakeWriterFactory {
 
     private final DucklakeSinkConfig config;
     private final DuckDBConnection conn;
