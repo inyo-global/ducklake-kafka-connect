@@ -1,3 +1,18 @@
+/*
+ * Copyright 2025 Inyo Contributors
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package com.inyo.ducklake.ingestor;
 
 import java.nio.charset.StandardCharsets;
@@ -61,11 +76,17 @@ public final class DucklakeWriter implements AutoCloseable {
 
   private void insertData(VectorSchemaRoot root) throws SQLException {
     List<Field> fields = root.getSchema().getFields();
-
     for (Field f : fields) {
       SqlIdentifierUtil.safeIdentifier(f.getName());
     }
     SqlIdentifierUtil.safeIdentifier(config.destinationTable());
+
+    String[] pkCols = config.tableIdColumns();
+    if (pkCols.length > 0) {
+      upsertWithOnConflict(root, fields, pkCols);
+      return;
+    }
+
     String columnList =
         fields.stream()
             .map(f -> SqlIdentifierUtil.quote(f.getName()))
@@ -91,6 +112,91 @@ public final class DucklakeWriter implements AutoCloseable {
         ps.addBatch();
       }
       ps.executeBatch();
+    }
+  }
+
+  private void upsertWithOnConflict(VectorSchemaRoot root, List<Field> fields, String[] pkCols)
+      throws SQLException {
+    java.util.Set<String> pkSet =
+        java.util.Arrays.stream(pkCols)
+            .map(c -> c.toLowerCase(java.util.Locale.ROOT))
+            .collect(java.util.stream.Collectors.toSet());
+
+    List<Field> nonKey =
+        fields.stream()
+            .filter(f -> !pkSet.contains(f.getName().toLowerCase(java.util.Locale.ROOT)))
+            .toList();
+
+    // Pré-construir sentenças UPDATE e INSERT
+    String tableQuoted = SqlIdentifierUtil.quote(config.destinationTable());
+
+    String updateSql = null;
+    if (!nonKey.isEmpty()) {
+      String setClause =
+          nonKey.stream()
+              .map(f -> SqlIdentifierUtil.quote(f.getName()) + " = ?")
+              .collect(Collectors.joining(","));
+      String whereClause =
+          java.util.Arrays.stream(pkCols)
+              .map(pk -> SqlIdentifierUtil.quote(pk) + " = ?")
+              .collect(Collectors.joining(" AND "));
+      updateSql = "UPDATE " + tableQuoted + " SET " + setClause + " WHERE " + whereClause;
+    }
+
+    String insertColumns =
+        fields.stream()
+            .map(f -> SqlIdentifierUtil.quote(f.getName()))
+            .collect(Collectors.joining(","));
+    String insertPlaceholders = fields.stream().map(f -> "?").collect(Collectors.joining(","));
+    String pkConflict =
+        java.util.Arrays.stream(pkCols)
+            .map(SqlIdentifierUtil::quote)
+            .collect(Collectors.joining(","));
+    String insertSql =
+        "INSERT INTO "
+            + tableQuoted
+            + " ("
+            + insertColumns
+            + ") VALUES ("
+            + insertPlaceholders
+            + ") ON CONFLICT ("
+            + pkConflict
+            + ") DO NOTHING";
+
+    try (PreparedStatement updatePs =
+            updateSql == null ? null : connection.prepareStatement(updateSql);
+        PreparedStatement insertPs = connection.prepareStatement(insertSql)) {
+      int rowCount = root.getRowCount();
+      for (int row = 0; row < rowCount; row++) {
+
+        if (updatePs != null) {
+          int upIdx = 1;
+
+          for (Field f : nonKey) {
+            FieldVector vec = root.getVector(f.getName());
+            bindParam(updatePs, upIdx++, vec, row, f.getType());
+          }
+          // chaves WHERE
+          for (String pk : pkCols) {
+            FieldVector vec = root.getVector(pk);
+            Field field =
+                fields.stream().filter(fl -> fl.getName().equals(pk)).findFirst().orElseThrow();
+            bindParam(updatePs, upIdx++, vec, row, field.getType());
+          }
+          updatePs.addBatch();
+        }
+        // 2. INSERT
+        int insIdx = 1;
+        for (Field f : fields) {
+          FieldVector vec = root.getVector(f.getName());
+          bindParam(insertPs, insIdx++, vec, row, f.getType());
+        }
+        insertPs.addBatch();
+      }
+      if (updatePs != null) {
+        updatePs.executeBatch();
+      }
+      insertPs.executeBatch();
     }
   }
 

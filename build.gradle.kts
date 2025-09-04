@@ -59,17 +59,14 @@ tasks.check {
 spotless {
     java {
         target("src/**/*.java")
-
+        licenseHeaderFile("config/spotless.license.java", "package ")
         // Google Java Format for consistent formatting
         googleJavaFormat()
-
         // Import organization - no wildcard imports
         removeUnusedImports()
-
         // Whitespace and line ending fixes
         trimTrailingWhitespace()
         endWithNewline()
-
         // Custom rules that replace some Checkstyle functionality
         custom("no-wildcard-imports") { content ->
             if (content.contains("import .*\\*;".toRegex())) {
@@ -77,7 +74,6 @@ spotless {
             }
             content
         }
-
         custom("line-length-check") { content ->
             val lines = content.split("\n")
             lines.forEachIndexed { index, line ->
