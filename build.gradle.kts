@@ -20,6 +20,7 @@ dependencies {
     compileOnly("org.apache.kafka:kafka-clients:4.0.0")
     compileOnly("org.apache.kafka:connect-api:4.0.0")
     compileOnly("org.apache.kafka:connect-json:4.0.0")
+    compileOnly("com.github.spotbugs:spotbugs-annotations:4.8.4")
 
     testImplementation(platform("org.junit:junit-bom:5.10.0"))
     testImplementation("org.junit.jupiter:junit-jupiter")

@@ -23,7 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-public class DucklakeWriter {
+public final class DucklakeWriter implements AutoCloseable {
 
     private static final System.Logger LOG = System.getLogger(DucklakeWriter.class.getName());
 
@@ -32,9 +32,17 @@ public class DucklakeWriter {
     private final DucklakeTableManager tableManager;
 
     public DucklakeWriter(DuckDBConnection connection, DucklakeWriterConfig config) {
-        this.connection = connection;
+        if (connection == null) {
+            throw new IllegalArgumentException("DuckDBConnection cannot be null");
+        }
         this.config = config;
-        this.tableManager = new DucklakeTableManager(connection, config);
+        try {
+            // Defensive duplicate so internal state is isolated from caller
+            this.connection = (DuckDBConnection) connection.duplicate();
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to duplicate DuckDB connection for writer", e);
+        }
+        this.tableManager = new DucklakeTableManager(this.connection, config);
     }
 
     // Ensure schema (create/evolve) then insert rows
@@ -182,5 +190,19 @@ public class DucklakeWriter {
             }
         }
         return sb.toString();
+    }
+
+    @Override
+    public void close() {
+        try {
+            tableManager.close();
+        } catch (Exception e) {
+            LOG.log(System.Logger.Level.WARNING, "Failed to close table manager: {0}", e.getMessage());
+        }
+        try {
+            connection.close();
+        } catch (SQLException e) {
+            LOG.log(System.Logger.Level.WARNING, "Failed to close writer connection: {0}", e.getMessage());
+        }
     }
 }

@@ -20,13 +20,32 @@ import java.util.stream.Collectors;
  * Converts Kafka SinkRecords to Arrow VectorSchemaRoot with unified schema.
  * Handles schema unification, type conversion, and data population.
  */
-public class SinkRecordToArrowConverter {
+public final class SinkRecordToArrowConverter implements AutoCloseable {
     private static final System.Logger LOG = System.getLogger(SinkRecordToArrowConverter.class.getName());
 
+    /**
+     * Child allocator owned by this converter (defensive isolation from external allocator).
+     */
     private final BufferAllocator allocator;
+    // not closed here
 
-    public SinkRecordToArrowConverter(BufferAllocator allocator) {
-        this.allocator = allocator;
+    public SinkRecordToArrowConverter(BufferAllocator externalAllocator) {
+        if (externalAllocator == null) {
+            throw new IllegalArgumentException("Allocator cannot be null");
+        }
+        // Create a child allocator to avoid exposing internal representation / accidental over-release
+        this.allocator = externalAllocator.newChildAllocator(
+                "sink-record-converter", 0, Long.MAX_VALUE
+        );
+    }
+
+    @Override
+    public void close() {
+        try {
+            allocator.close();
+        } catch (Exception e) {
+            LOG.log(System.Logger.Level.WARNING, "Failed to close converter allocator: {0}", e.getMessage());
+        }
     }
 
     /**
@@ -166,21 +185,18 @@ public class SinkRecordToArrowConverter {
         for (org.apache.kafka.connect.data.Field kafkaField : struct.schema().fields()) {
             String fieldName = kafkaField.name();
             Object value = struct.get(fieldName);
-
             FieldVector vector = vectorMap.get(fieldName);
             if (vector != null) {
                 setVectorValue(vector, rowIndex, value, kafkaField.schema());
             }
         }
-
         // Handle fields that exist in unified schema but not in this struct (set to null)
         Set<String> structFieldNames = struct.schema().fields().stream()
                 .map(org.apache.kafka.connect.data.Field::name)
                 .collect(Collectors.toSet());
-
-        for (String vectorFieldName : vectorMap.keySet()) {
-            if (!structFieldNames.contains(vectorFieldName)) {
-                vectorMap.get(vectorFieldName).setNull(rowIndex);
+        for (Map.Entry<String, FieldVector> entry : vectorMap.entrySet()) {
+            if (!structFieldNames.contains(entry.getKey())) {
+                entry.getValue().setNull(rowIndex);
             }
         }
     }

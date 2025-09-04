@@ -1,5 +1,6 @@
 package com.inyo.ducklake.ingestor;
 
+import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
@@ -7,6 +8,7 @@ import org.duckdb.DuckDBConnection;
 
 import java.sql.*;
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -16,17 +18,31 @@ import java.util.stream.Collectors;
  *  - Evolve (add new columns)
  *  - Validate type compatibility
  */
-public class DucklakeTableManager {
+public final class DucklakeTableManager {
 
     private static final System.Logger LOG = System.getLogger(DucklakeTableManager.class.getName());
 
     private final DuckDBConnection connection;
     private final DucklakeWriterConfig config;
     private Map<String, ColumnMeta> cachedMeta; // lowercase column name -> meta
+    private static final Pattern IDENT_PATTERN = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
 
     public DucklakeTableManager(DuckDBConnection connection, DucklakeWriterConfig config) {
-        this.connection = connection;
         this.config = config;
+        try {
+            // Defensive copy to avoid exposing external mutable connection instance
+            this.connection = (DuckDBConnection) connection.duplicate();
+        } catch (SQLException e) {
+            throw new RuntimeException("Failed to duplicate DuckDB connection", e);
+        }
+    }
+
+    public void close() {
+        try {
+            connection.close();
+        } catch (SQLException e) {
+            LOG.log(System.Logger.Level.WARNING, "Failed to close duplicated DuckDB connection: {0}", e.getMessage());
+        }
     }
 
     /**
@@ -59,19 +75,34 @@ public class DucklakeTableManager {
         return false;
     }
 
+    private String safeIdentifier(String raw) {
+        if (raw == null || !IDENT_PATTERN.matcher(raw).matches()) {
+            throw new IllegalArgumentException("Invalid identifier: " + raw);
+        }
+        return raw;
+    }
+
+    @SuppressFBWarnings( value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE", justification = "Identifiers sanitized via safeIdentifier; PreparedStatement cannot parameterize DDL identifiers." )
     private void createTable(Schema arrowSchema) throws SQLException {
+        // Validate table & column identifiers early (prepared statements cannot parameterize DDL identifiers)
+        String tableName = safeIdentifier(config.destinationTable());
+        for (Field f : arrowSchema.getFields()) {
+            safeIdentifier(f.getName());
+        }
         String cols = arrowSchema.getFields().stream()
                 .map(f -> quote(f.getName()) + " " + toDuckDBType(f.getType()))
                 .collect(Collectors.joining(", "));
         StringBuilder ddl = new StringBuilder();
-        ddl.append("CREATE TABLE ").append(quote(config.destinationTable())).append(" (");
+        ddl.append("CREATE TABLE ").append(quote(tableName)).append(" (");
         ddl.append(cols);
         String[] pkCols = config.tableIdColumns();
         if (pkCols.length > 0) {
+            for (String pk : pkCols) { safeIdentifier(pk); }
             String pk = Arrays.stream(pkCols).map(this::quote).collect(Collectors.joining(","));
             ddl.append(", PRIMARY KEY (").append(pk).append(")");
         }
         ddl.append(")");
+        // SpotBugs SQL: Using Statement with sanitized identifiers only (no untrusted user input).
         try (Statement st = connection.createStatement()) {
             st.execute(ddl.toString());
         }
@@ -127,7 +158,7 @@ public class DucklakeTableManager {
         if (e.equals(ex)) return TypeEvolutionDecision.COMPATIBLE_KEEP;
         // JSON only matches JSON (no evolution between JSON and others)
         if (e.equals("JSON") || ex.equals("JSON")) {
-            return e.equals(ex) ? TypeEvolutionDecision.COMPATIBLE_KEEP : TypeEvolutionDecision.INCOMPATIBLE;
+            return TypeEvolutionDecision.INCOMPATIBLE;
         }
         List<String> intOrder = List.of("TINYINT","SMALLINT","INTEGER","BIGINT");
         if (intOrder.contains(e) && intOrder.contains(ex)) {
@@ -172,16 +203,11 @@ public class DucklakeTableManager {
         return cachedMeta;
     }
 
-    // Inspection helpers for tests (package-private)
+
     boolean isMetadataCached() { return cachedMeta != null; }
     Set<String> cachedColumnNames() { return cachedMeta == null ? Set.of() : new HashSet<>(cachedMeta.keySet()); }
 
     private record ColumnMeta(String name, String type) {}
-
-    private boolean isTypeCompatible(String existingTypeRaw, String expectedTypeRaw) {
-        // Deprecated path: replaced by evaluateTypeEvolution usage; keep for backward compatibility if referenced elsewhere
-        return true;
-    }
 
     public String toDuckDBType(ArrowType type) {
         if (type instanceof ArrowType.Int i) {

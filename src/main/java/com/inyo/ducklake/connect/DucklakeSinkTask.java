@@ -99,21 +99,23 @@ public class DucklakeSinkTask extends SinkTask {
     @Override
     public void stop() {
         try {
-            // Close all writers
             if (writers != null) {
+                for (DucklakeWriter w : writers.values()) {
+                    try { w.close(); } catch (Exception e) { LOG.log(System.Logger.Level.WARNING, "Failed closing writer: {0}", e.getMessage()); }
+                }
                 writers.clear();
                 LOG.log(System.Logger.Level.INFO, "Cleared all writers");
             }
-
-            // Close allocator
+            if (converter != null) {
+                try { converter.close(); } catch (Exception e) { LOG.log(System.Logger.Level.WARNING, "Failed closing converter: {0}", e.getMessage()); }
+            }
             if (allocator != null) {
                 allocator.close();
             }
-
-            if (connectionFactory != null && connectionFactory.getConnection() != null) {
-                connectionFactory.getConnection().close();
+            if (connectionFactory != null) {
+                connectionFactory.close();
             }
-        } catch (SQLException e) {
+        } catch (Exception e) {
             throw new RuntimeException("Failed to stop DucklakeSinkTask", e);
         }
     }

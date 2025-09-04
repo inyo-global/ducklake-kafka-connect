@@ -21,7 +21,7 @@ public class DucklakeSinkConnector extends SinkConnector  {
 
     @Override
     public void start(Map<String, String> connectorProps) {
-        this.props = connectorProps;
+        this.props = new HashMap<>(connectorProps);
     }
 
     @Override
