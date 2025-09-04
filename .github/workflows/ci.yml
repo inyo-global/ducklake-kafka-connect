@@ -7,6 +7,12 @@ on:
     branches: [ main, develop ]
   workflow_dispatch:
 
+# Permissões necessárias para criar check runs (test-reporter) e enviar SARIF (CodeQL/SpotBugs)
+permissions:
+  contents: read
+  checks: write
+  security-events: write
+
 env:
   JAVA_VERSION: '21'
   JAVA_DISTRIBUTION: 'temurin'
@@ -212,6 +218,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build, static-analysis, security-scan]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
+    permissions:
+      contents: write  # Necessário para criar release
 
     steps:
     - name: Checkout code
