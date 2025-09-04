@@ -1,7 +1,7 @@
 plugins {
     id("java")
-    id("checkstyle")
     id("com.github.spotbugs") version "6.0.18"
+    id("com.diffplug.spotless") version "6.25.0"
 }
 
 group = "com.inyo"
@@ -28,16 +28,11 @@ dependencies {
     testImplementation("org.apache.kafka:connect-api:4.0.0")
 }
 
-checkstyle {
-    toolVersion = "10.12.4"
-    configFile = file("config/checkstyle/checkstyle.xml")
-    isIgnoreFailures = false
-}
-
 spotbugs {
     toolVersion.set("4.8.4")
     effort.set(com.github.spotbugs.snom.Effort.MAX)
     reportLevel.set(com.github.spotbugs.snom.Confidence.LOW)
+    ignoreFailures.set(false) // Fail build on any SpotBugs violations
 }
 
 tasks.withType<com.github.spotbugs.snom.SpotBugsTask> {
@@ -58,5 +53,39 @@ tasks.test {
 }
 
 tasks.check {
-    dependsOn("spotbugsMain", "spotbugsTest")
+    dependsOn("spotbugsMain", "spotbugsTest", "spotlessCheck")
+}
+
+spotless {
+    java {
+        target("src/**/*.java")
+
+        // Google Java Format for consistent formatting
+        googleJavaFormat()
+
+        // Import organization - no wildcard imports
+        removeUnusedImports()
+
+        // Whitespace and line ending fixes
+        trimTrailingWhitespace()
+        endWithNewline()
+
+        // Custom rules that replace some Checkstyle functionality
+        custom("no-wildcard-imports") { content ->
+            if (content.contains("import .*\\*;".toRegex())) {
+                throw RuntimeException("Wildcard imports are not allowed. Use specific imports instead.")
+            }
+            content
+        }
+
+        custom("line-length-check") { content ->
+            val lines = content.split("\n")
+            lines.forEachIndexed { index, line ->
+                if (line.length > 120 && !line.trim().startsWith("//") && !line.contains("http")) {
+                    throw RuntimeException("Line ${index + 1} exceeds 120 characters: ${line.length} chars")
+                }
+            }
+            content
+        }
+    }
 }
