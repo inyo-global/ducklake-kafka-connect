@@ -136,9 +136,7 @@ public final class DucklakeTableManager {
     }
     Map<String, ColumnMeta> map = new HashMap<>();
     for (Field f : arrowSchema.getFields()) {
-      map.put(
-          f.getName().toLowerCase(Locale.ROOT),
-          new ColumnMeta(f.getName(), toDuckDBType(f.getType())));
+      map.put(f.getName().toLowerCase(Locale.ROOT), new ColumnMeta(toDuckDBType(f.getType())));
     }
     cachedMeta = map;
   }
@@ -193,7 +191,7 @@ public final class DucklakeTableManager {
           st.execute(ddl);
         }
         if (cachedMeta != null) {
-          cachedMeta.put(col.toLowerCase(Locale.ROOT), new ColumnMeta(col, newType));
+          cachedMeta.put(col.toLowerCase(Locale.ROOT), new ColumnMeta(newType));
         }
       }
     }
@@ -242,7 +240,7 @@ public final class DucklakeTableManager {
       st.execute(ddl);
     }
     if (cachedMeta != null) {
-      cachedMeta.put(col.toLowerCase(Locale.ROOT), new ColumnMeta(col, newType));
+      cachedMeta.put(col.toLowerCase(Locale.ROOT), new ColumnMeta(newType));
     }
   }
 
@@ -259,7 +257,7 @@ public final class DucklakeTableManager {
         while (rs.next()) {
           String name = rs.getString("name");
           String type = rs.getString("type");
-          map.put(name.toLowerCase(Locale.ROOT), new ColumnMeta(name, type));
+          map.put(name.toLowerCase(Locale.ROOT), new ColumnMeta(type));
         }
       }
     }
@@ -275,7 +273,13 @@ public final class DucklakeTableManager {
     return cachedMeta == null ? Set.of() : new HashSet<>(cachedMeta.keySet());
   }
 
-  private record ColumnMeta(String name, String type) {}
+  private static final class ColumnMeta {
+    private final String type;
+
+    private ColumnMeta(String type) {
+      this.type = type;
+    }
+  }
 
   public String toDuckDBType(ArrowType type) {
     if (type instanceof ArrowType.Int i) {

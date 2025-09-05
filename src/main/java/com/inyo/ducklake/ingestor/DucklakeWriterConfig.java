@@ -16,9 +16,10 @@
 package com.inyo.ducklake.ingestor;
 
 import java.util.Arrays;
+import java.util.Objects;
 
 /**
- * Configuration record for DucklakeWriter containing all necessary settings for writing data to
+ * Configuration class for DucklakeWriter containing all necessary settings for writing data to
  * DuckDB tables.
  *
  * @param destinationTable the destination table name where data will be written
@@ -31,11 +32,17 @@ public record DucklakeWriterConfig(
     boolean autoCreateTable,
     String[] tableIdColumns,
     String[] partitionByColumns) {
-
   /** Compact constructor that validates and clones arrays to ensure immutability. */
-  public DucklakeWriterConfig {
-    tableIdColumns = tableIdColumns != null ? tableIdColumns.clone() : new String[0];
-    partitionByColumns = partitionByColumns != null ? partitionByColumns.clone() : new String[0];
+  public DucklakeWriterConfig(
+      String destinationTable,
+      boolean autoCreateTable,
+      String[] tableIdColumns,
+      String[] partitionByColumns) {
+    this.destinationTable = Objects.requireNonNull(destinationTable, "destinationTable");
+    this.autoCreateTable = autoCreateTable;
+    this.tableIdColumns = tableIdColumns != null ? tableIdColumns.clone() : new String[0];
+    this.partitionByColumns =
+        partitionByColumns != null ? partitionByColumns.clone() : new String[0];
   }
 
   /**
@@ -43,6 +50,7 @@ public record DucklakeWriterConfig(
    *
    * @return array of ID column names (cloned for immutability)
    */
+  @Override
   public String[] tableIdColumns() {
     return tableIdColumns.clone();
   }
@@ -52,6 +60,7 @@ public record DucklakeWriterConfig(
    *
    * @return array of partition column names (cloned for immutability)
    */
+  @Override
   public String[] partitionByColumns() {
     return partitionByColumns.clone();
   }
@@ -65,5 +74,13 @@ public record DucklakeWriterConfig(
         && destinationTable.equals(that.destinationTable)
         && Arrays.equals(tableIdColumns, that.tableIdColumns)
         && Arrays.equals(partitionByColumns, that.partitionByColumns);
+  }
+
+  @Override
+  public int hashCode() {
+    int result = Objects.hash(destinationTable, autoCreateTable);
+    result = 31 * result + Arrays.hashCode(tableIdColumns);
+    result = 31 * result + Arrays.hashCode(partitionByColumns);
+    return result;
   }
 }
