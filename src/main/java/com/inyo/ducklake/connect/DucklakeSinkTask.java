@@ -103,8 +103,7 @@ public class DucklakeSinkTask extends SinkTask {
         }
 
         try {
-          // TODO: Pass vectorSchemaRoot to writer for processing
-          // writer.write(vectorSchemaRoot);
+           writer.write(vectorSchemaRoot);
 
           LOG.log(
               System.Logger.Level.INFO,

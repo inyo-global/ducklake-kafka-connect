@@ -1,58 +1,58 @@
-# Configuração do IntelliJ IDEA - Guia de Imports e Formatação
+# IntelliJ IDEA Configuration - Imports and Formatting Guide
 
-Este documento explica como configurar o IntelliJ IDEA para trabalhar com Spotless e manter o código consistente.
+This document explains how to configure IntelliJ IDEA to work with Spotless and keep code consistent.
 
-## Configuração Automática (Projeto)
+## Project Automatic Configuration
 
-Os arquivos de configuração já estão incluídos no projeto na pasta `.idea/`:
-- `.idea/codeStyles/codeStyleConfig.xml` - Configuração principal
-- `.idea/inspectionProfiles/Project_Default.xml` - Perfil de inspeções
+Project configuration files are already included in the `.idea/` folder:
+- `.idea/codeStyles/codeStyleConfig.xml` - main configuration
+- `.idea/inspectionProfiles/Project_Default.xml` - inspection profile
 
 ## Spotless Integration
 
-O projeto usa **Spotless** como ferramenta principal de formatação e qualidade de código, que substitui o Checkstyle com vantagens:
+The project uses **Spotless** as the primary formatting and code quality tool, replacing Checkstyle with several advantages:
 
-### Vantagens do Spotless vs Checkstyle:
-- ✅ **Auto-fix**: Corrige automaticamente a maioria dos problemas
-- ✅ **Google Java Format**: Formatação consistente e moderna
-- ✅ **Regras customizadas**: Flexibilidade para regras específicas
-- ✅ **Menos configuração**: Menos arquivos XML complexos
-- ✅ **Integração nativa**: Melhor integração com Gradle
+### Advantages of Spotless vs Checkstyle:
+- ✅ **Auto-fix**: Automatically corrects most issues
+- ✅ **Google Java Format**: Consistent, modern formatting
+- ✅ **Custom rules**: Flexibility for project-specific rules
+- ✅ **Less configuration**: Fewer complex XML files
+- ✅ **Native Gradle integration**: Better integration with the build
 
-### Comandos Spotless:
+### Spotless commands:
 ```bash
-./gradlew spotlessCheck    # Verifica formatação
-./gradlew spotlessApply    # Aplica correções automaticamente
-./gradlew check           # Roda todos os checks (inclui Spotless)
+./gradlew spotlessCheck    # Verifies formatting
+./gradlew spotlessApply    # Applies fixes automatically
+./gradlew check            # Runs all checks (includes Spotless)
 ```
 
-## Configuração Manual (Para outros projetos)
+## Manual Configuration (For other projects)
 
-### 1. Configurar Imports (Evitar Wildcard)
+### 1. Configure Imports (Avoid wildcard imports)
 
-1. Abra **File → Settings** (ou **IntelliJ IDEA → Preferences** no macOS)
-2. Navegue para **Editor → Code Style → Java**
-3. Vá para a aba **Imports**
-4. Configure as seguintes opções:
+1. Open **File → Settings** (or **IntelliJ IDEA → Preferences** on macOS)
+2. Navigate to **Editor → Code Style → Java**
+3. Go to the **Imports** tab
+4. Configure the following options:
 
 ```
 Class count to use import with '*': 999
 Names count to use static import with '*': 999
 ```
 
-5. Limpe a lista "Packages to Use Import with '*'" (deixe vazia)
+5. Clear the list "Packages to Use Import with '*'" (leave empty)
 
-### 2. Instalar Plugin Google Java Format
+### 2. Install Google Java Format Plugin
 
-1. Vá para **File → Settings → Plugins**
-2. Procure por "google-java-format"
-3. Instale e reinicie o IntelliJ
-4. Ative em **Settings → google-java-format Settings**
-5. Marque "Enable google-java-format"
+1. Go to **File → Settings → Plugins**
+2. Search for "google-java-format"
+3. Install and restart IntelliJ
+4. Enable it in **Settings → google-java-format Settings**
+5. Check "Enable google-java-format"
 
-### 3. Configurar Formatação Automática
+### 3. Configure Automatic Formatting
 
-1. Em **Editor → Code Style → Java**
+1. Under **Editor → Code Style → Java**
 2. Configure:
    - **Right margin**: 120
    - **Wrap long lines**: ✓
@@ -60,68 +60,68 @@ Names count to use static import with '*': 999
    - **Indent**: 2
    - **Continuation indent**: 4
 
-### 4. Ativar Inspeções para Imports
+### 4. Enable Import Inspections
 
-1. Vá para **Editor → Inspections**
-2. Procure por "On demand import" e marque como **Error**
-3. Procure por "Unused import" e marque como **Warning**
+1. Go to **Editor → Inspections**
+2. Search for "On demand import" and set it to **Error**
+3. Search for "Unused import" and set it to **Warning**
 
-## Workflow Recomendado
+## Recommended Workflow
 
-### Antes de Commit:
-1. **Ctrl+Alt+L** (Cmd+Alt+L no Mac): Reformatar código
-2. **Ctrl+Alt+O** (Cmd+Alt+O no Mac): Otimizar imports
-3. Execute: `./gradlew spotlessApply`
-4. Execute: `./gradlew check`
+### Before committing:
+1. **Ctrl+Alt+L** (Cmd+Alt+L on Mac): Reformat code
+2. **Ctrl+Alt+O** (Cmd+Alt+O on Mac): Optimize imports
+3. Run: `./gradlew spotlessApply`
+4. Run: `./gradlew check`
 
-### Durante Desenvolvimento:
-- Configure "Actions on Save" para rodar formatação automaticamente
-- Use o plugin google-java-format para formatação consistente
+### During development:
+- Configure "Actions on Save" to run formatting automatically
+- Use the google-java-format plugin for consistent formatting
 
-## Regras Implementadas no Spotless
+## Rules enforced by Spotless
 
-O projeto implementa as seguintes verificações customizadas:
+The project enforces the following custom checks:
 
-### 1. **No Wildcard Imports**
+### 1. No wildcard imports
 ```
-import java.util.*;  // ❌ Erro
-import java.util.List;  // ✅ Correto
+import java.util.*;  // ❌ Error
+import java.util.List;  // ✅ Correct
 ```
 
-### 2. **Line Length Check**
-- Máximo 120 caracteres por linha
-- Exceções: comentários e URLs
+### 2. Line length check
+- Maximum 120 characters per line
+- Exceptions: comments and URLs
 
-### 3. **Magic Numbers Check**
-- Números literais devem ser constantes
+### 3. Magic numbers check
+- Numeric literals should be constants
 ```java
-int size = 42;  // ❌ Erro
-private static final int DEFAULT_SIZE = 42;  // ✅ Correto
+int size = 42;  // ❌ Error
+private static final int DEFAULT_SIZE = 42;  // ✅ Correct
 ```
 
-### 4. **Formatação Automática**
+### 4. Automatic formatting
 - Google Java Format
-- Remoção de imports não utilizados
-- Remoção de espaços em branco
-- Newline no final dos arquivos
+- Remove unused imports
+- Trim trailing whitespace
+- Ensure newline at end of files
 
 ## Troubleshooting
 
-### Se o Spotless falhar:
-1. Execute `./gradlew spotlessApply` para corrigir automaticamente
-2. Verifique se não há imports wildcard
-3. Verifique se não há linhas muito longas
-4. Verifique se não há números mágicos
+### If Spotless fails:
+1. Run `./gradlew spotlessApply` to automatically fix issues
+2. Check for wildcard imports
+3. Check for excessively long lines
+4. Check for magic numbers
 
-### Se o IntelliJ não formatar corretamente:
-1. Verifique se o plugin google-java-format está ativado
-2. Execute **File → Invalidate Caches and Restart**
-3. Verifique se **Use per-project settings** está ativado
+### If IntelliJ doesn't format correctly:
+1. Ensure the google-java-format plugin is enabled
+2. Run **File → Invalidate Caches and Restart**
+3. Ensure **Use per-project settings** is enabled
 
 ## CI/CD Integration
 
-O pipeline automaticamente:
-- ✅ Roda `spotlessCheck` para verificar formatação
-- ✅ Roda `spotbugsMain/Test` para análise estática
-- ✅ Falha se houver violações de formatação
-- ✅ Gera relatórios de qualidade de código
+The pipeline automatically:
+- ✅ Runs `spotlessCheck` to verify formatting
+- ✅ Runs `spotbugsMain/Test` for static analysis
+- ✅ Fails the build if formatting violations are present
+- ✅ Produces code quality reports

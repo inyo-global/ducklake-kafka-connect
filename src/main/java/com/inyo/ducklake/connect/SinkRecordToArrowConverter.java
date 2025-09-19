@@ -16,6 +16,9 @@
 package com.inyo.ducklake.connect;
 
 import com.inyo.ducklake.ingestor.ArrowSchemaMerge;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.HashMap;
@@ -41,6 +44,7 @@ import org.apache.arrow.vector.complex.StructVector;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.sink.SinkRecord;
 
@@ -52,7 +56,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
   private static final System.Logger LOG =
       System.getLogger(SinkRecordToArrowConverter.class.getName());
 
-  /** Child allocator owned by this converter (defensive isolation from external allocator). */
+  private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
+
   private final BufferAllocator allocator;
 
   // not closed here
@@ -89,6 +94,45 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
     }
 
     try {
+      // Preprocess records: handle schemaless JSON strings/maps by inferring a Connect schema
+        records = records.stream()
+            .map(r1 -> {
+              if (r1.valueSchema() != null) return r1;
+              Object val = r1.value();
+
+              // If the value is a JSON string, try to parse it into a Map
+              if (val instanceof String s) {
+                try {
+                  Object parsed = JSON_MAPPER.readValue(s, new TypeReference<>() {});
+                  if (parsed instanceof Map<?, ?> mParsed) {
+                    val = mParsed;
+                  } else {
+                    return r1; // leave unchanged if not a map
+                  }
+                } catch (IOException ex) {
+                  return r1; // not JSON - leave unchanged
+                }
+              }
+
+              if (val instanceof Map<?, ?> mapVal) {
+                org.apache.kafka.connect.data.Schema inferred = inferSchemaFromObject(mapVal);
+                Struct struct = buildStructFromMap(mapVal, inferred);
+                return new SinkRecord(r1.topic(), r1.kafkaPartition(), r1.keySchema(), r1.key(), inferred, struct, r1.kafkaOffset());
+              }
+              return r1;
+            })
+            .collect(Collectors.toList());
+
+      // Debug: log valueSchema presence and value type for each record to diagnose empty schema list
+      for (SinkRecord r : records) {
+        try {
+          LOG.log(System.Logger.Level.INFO, "Record topic={0} partition={1} valueSchema={2} valueClass={3}",
+              r.topic(), r.kafkaPartition(), r.valueSchema(), r.value() != null ? r.value().getClass() : "null");
+        } catch (Exception e) {
+          // ignore logging errors in tests
+        }
+      }
+
       // Convert Kafka schemas to Arrow schemas
       List<Schema> arrowSchemas = extractArrowSchemas(records);
 
@@ -363,5 +407,76 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       pairsAdded++;
     }
     mapVector.endValue(index, pairsAdded);
+  }
+
+  // Infer a Kafka Connect schema for a given example object (Maps -> STRUCT, Collections -> ARRAY)
+  private org.apache.kafka.connect.data.Schema inferSchemaFromObject(Object example) {
+    if (example == null) {
+      return SchemaBuilder.string().optional().build();
+    }
+    if (example instanceof Map<?, ?> map) {
+      SchemaBuilder sb = org.apache.kafka.connect.data.SchemaBuilder.struct();
+      for (var e : map.entrySet()) {
+        String name = String.valueOf(e.getKey());
+        Object v = e.getValue();
+        org.apache.kafka.connect.data.Schema childSchema = inferSchemaFromObject(v);
+        sb.field(name, childSchema);
+      }
+      return sb.build();
+    }
+    if (example instanceof Collection<?> coll) {
+      org.apache.kafka.connect.data.Schema elemSchema = org.apache.kafka.connect.data.SchemaBuilder.string().optional().build();
+      for (Object o : coll) {
+        if (o != null) {
+          elemSchema = inferSchemaFromObject(o);
+          break;
+        }
+      }
+      return org.apache.kafka.connect.data.SchemaBuilder.array(elemSchema).build();
+    }
+    if (example instanceof Integer) return org.apache.kafka.connect.data.Schema.INT32_SCHEMA;
+    if (example instanceof Long) return org.apache.kafka.connect.data.Schema.INT64_SCHEMA;
+    if (example instanceof Short) return org.apache.kafka.connect.data.Schema.INT16_SCHEMA;
+    if (example instanceof Byte) return org.apache.kafka.connect.data.Schema.INT8_SCHEMA;
+    if (example instanceof Float) return org.apache.kafka.connect.data.Schema.FLOAT32_SCHEMA;
+    if (example instanceof Double) return org.apache.kafka.connect.data.Schema.FLOAT64_SCHEMA;
+    if (example instanceof Boolean) return org.apache.kafka.connect.data.Schema.BOOLEAN_SCHEMA;
+    if (example instanceof byte[]) return org.apache.kafka.connect.data.Schema.BYTES_SCHEMA;
+    // default to string
+    return org.apache.kafka.connect.data.Schema.STRING_SCHEMA;
+  }
+
+  // Build a Struct from a Map using the provided schema (assumes schema is a STRUCT)
+  private Struct buildStructFromMap(Map<?, ?> map, org.apache.kafka.connect.data.Schema schema) {
+    if (schema == null || schema.type() != org.apache.kafka.connect.data.Schema.Type.STRUCT) {
+      throw new IllegalArgumentException("Schema must be a STRUCT to build a Struct");
+    }
+    Struct struct = new Struct(schema);
+    for (org.apache.kafka.connect.data.Field f : schema.fields()) {
+      Object raw = map.get(f.name());
+      if (raw == null) {
+        struct.put(f.name(), null);
+        continue;
+      }
+      switch (f.schema().type()) {
+        case STRUCT -> struct.put(f.name(), buildStructFromMap((Map<?, ?>) raw, f.schema()));
+        case ARRAY -> {
+          if (raw instanceof Collection<?> coll) {
+            struct.put(f.name(), coll);
+          } else {
+            struct.put(f.name(), null);
+          }
+        }
+        case MAP -> {
+          if (raw instanceof Map<?, ?> m) {
+            struct.put(f.name(), m);
+          } else {
+            struct.put(f.name(), null);
+          }
+        }
+        default -> struct.put(f.name(), raw);
+      }
+    }
+    return struct;
   }
 }

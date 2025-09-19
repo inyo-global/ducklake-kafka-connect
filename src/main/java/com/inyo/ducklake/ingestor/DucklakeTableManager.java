@@ -21,7 +21,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -85,18 +84,24 @@ public final class DucklakeTableManager {
     }
   }
 
-  public boolean tableExists(String table) throws SQLException {
-    final String sql =
-        "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'main' AND table_name = ?";
+  private String qualifiedTableRef() {
+    // Catalog alias 'lake', default schema 'main', quote only the table identifier
+    return "lake.main." + SqlIdentifierUtil.quote(safeIdentifier(config.destinationTable()));
+  }
+
+  public boolean tableExists(String table) {
+    // Use PRAGMA table_info to check existence within attached catalog 'lake'
+    final var tableName = "lake.main." + SqlIdentifierUtil.quote(safeIdentifier(config.destinationTable()));
+    final var sql = String.format("pragma table_info(%s)", tableName);
     try (PreparedStatement ps = connection.prepareStatement(sql)) {
-      ps.setString(1, table);
       try (ResultSet rs = ps.executeQuery()) {
-        if (rs.next()) {
-          return rs.getInt(1) > 0;
-        }
+        return rs.next();
       }
+    } catch (SQLException e) {
+      // If table does not exist, DuckDB may raise a Catalog Error; treat as non-existent
+      LOG.log(System.Logger.Level.DEBUG, "tableExists({0}) via PRAGMA failed: {1}", table, e.getMessage());
+      return false;
     }
-    return false;
   }
 
   // safeIdentifier agora centralizado em SqlIdentifierUtil
@@ -110,7 +115,7 @@ public final class DucklakeTableManager {
           "Identifiers sanitized via SqlIdentifierUtil.safeIdentifier; "
               + "PreparedStatement cannot parameterize DDL identifiers.")
   private void createTable(Schema arrowSchema) throws SQLException {
-    String tableName = safeIdentifier(config.destinationTable());
+    final var tableName = safeIdentifier(config.destinationTable());
     for (Field f : arrowSchema.getFields()) {
       safeIdentifier(f.getName());
     }
@@ -119,17 +124,9 @@ public final class DucklakeTableManager {
             .map(f -> SqlIdentifierUtil.quote(f.getName()) + " " + toDuckDBType(f.getType()))
             .collect(Collectors.joining(", "));
     StringBuilder ddl = new StringBuilder();
-    ddl.append("CREATE TABLE ").append(SqlIdentifierUtil.quote(tableName)).append(" (");
+    ddl.append("CREATE TABLE ").append("lake.main.").append(SqlIdentifierUtil.quote(tableName)).append(" (");
     ddl.append(cols);
-    String[] pkCols = config.tableIdColumns();
-    if (pkCols.length > 0) {
-      for (String pk : pkCols) {
-        safeIdentifier(pk);
-      }
-      String pk =
-          Arrays.stream(pkCols).map(SqlIdentifierUtil::quote).collect(Collectors.joining(","));
-      ddl.append(", PRIMARY KEY (").append(pk).append(")");
-    }
+    // PRIMARY KEY constraints are not supported in DuckLake, removing the constraint definition
     ddl.append(")");
     try (Statement st = connection.createStatement()) {
       st.execute(ddl.toString());
@@ -149,7 +146,6 @@ public final class DucklakeTableManager {
     Map<String, ColumnMeta> existing = loadExistingTableMeta();
     List<Field> fields = arrowSchema.getFields();
     List<Field> newColumns = new ArrayList<>();
-    String tableName = safeIdentifier(config.destinationTable());
     for (Field field : fields) {
       String colNameLower = field.getName().toLowerCase(Locale.ROOT);
       safeIdentifier(field.getName());
@@ -181,7 +177,7 @@ public final class DucklakeTableManager {
         String newType = toDuckDBType(nf.getType());
         String ddl =
             "ALTER TABLE "
-                + SqlIdentifierUtil.quote(tableName)
+                + qualifiedTableRef()
                 + " ADD COLUMN "
                 + SqlIdentifierUtil.quote(col)
                 + " "
@@ -226,11 +222,10 @@ public final class DucklakeTableManager {
       value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
       justification = "Identifiers validated via SqlIdentifierUtil.safeIdentifier.")
   private void performTypeUpgrade(String columnName, String newType) throws SQLException {
-    String tableName = safeIdentifier(config.destinationTable());
     String col = safeIdentifier(columnName);
     String ddl =
         "ALTER TABLE "
-            + SqlIdentifierUtil.quote(tableName)
+            + qualifiedTableRef()
             + " ALTER COLUMN "
             + SqlIdentifierUtil.quote(col)
             + " SET DATA TYPE "
@@ -250,9 +245,9 @@ public final class DucklakeTableManager {
     }
     Map<String, ColumnMeta> map = new HashMap<>();
     // Use prepared statement to avoid SpotBugs warning about dynamic SQL
-    final String sql = "SELECT name, type FROM pragma_table_info(?)";
+    final String sql = "PRAGMA table_info(?)";
     try (PreparedStatement ps = connection.prepareStatement(sql)) {
-      ps.setString(1, config.destinationTable());
+      ps.setString(1, qualifiedTableRef());
       try (ResultSet rs = ps.executeQuery()) {
         while (rs.next()) {
           String name = rs.getString("name");

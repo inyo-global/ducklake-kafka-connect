@@ -141,8 +141,6 @@ dependencies {
         exclude(group = "org.slf4j")
     }
     implementation("org.apache.arrow:arrow-memory-unsafe:18.3.0")
-    implementation("org.apache.arrow.adbc:adbc-core:0.20.0")
-    implementation("org.apache.arrow.adbc:adbc-driver-jdbc:0.20.0")
 
     compileOnly("org.apache.kafka:kafka-clients:4.0.0")
     compileOnly("org.apache.kafka:connect-api:4.0.0")
@@ -154,7 +152,11 @@ dependencies {
     testImplementation(platform("org.junit:junit-bom:5.10.0"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("org.apache.kafka:connect-api:4.0.0")
+    testImplementation("org.postgresql:postgresql:42.7.7")
+    testImplementation("io.minio:minio:8.5.17")
 
     add("integrationTestImplementation", "org.testcontainers:kafka:1.21.3")
     add("integrationTestImplementation", "org.testcontainers:postgresql:1.21.3")
+    add("integrationTestImplementation", "org.testcontainers:minio:1.21.3")
+    add("integrationTestImplementation", "org.testcontainers:junit-jupiter:1.21.3")
 }

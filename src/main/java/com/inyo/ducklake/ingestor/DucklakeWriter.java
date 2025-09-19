@@ -54,9 +54,16 @@ public final class DucklakeWriter implements AutoCloseable {
     }
     try {
       var schema = root.getSchema();
+      LOG.log(
+          System.Logger.Level.INFO,
+          "Writing {0} rows to table {1}",
+          new Object[] {root.getRowCount(), config.destinationTable()});
       tableManager.ensureTable(schema);
+      LOG.log(System.Logger.Level.DEBUG, "ensureTable completed for {0}", config.destinationTable());
       insertData(root);
+      LOG.log(System.Logger.Level.INFO, "Write completed for table {0}", config.destinationTable());
     } catch (SQLException e) {
+      LOG.log(System.Logger.Level.ERROR, "Failed during write to {0}: {1}", config.destinationTable(), e.getMessage());
       throw new RuntimeException("Failed to write data to " + config.destinationTable(), e);
     }
   }
@@ -75,13 +82,17 @@ public final class DucklakeWriter implements AutoCloseable {
 
   private void upsertWithMergeInto(VectorSchemaRoot root, List<Field> fields, String[] pkCols)
       throws SQLException {
-    var tableQuoted = SqlIdentifierUtil.quote(config.destinationTable());
+    var tableQuoted = "lake.main." + SqlIdentifierUtil.quote(config.destinationTable());
     var tempTable = "new_data_" + java.util.UUID.randomUUID().toString().replace("-", "");
 
     var allocator = root.getFieldVectors().get(0).getAllocator();
     var reader = RootArrowReader.fromRoot(allocator, root);
     try (var arrayStream = ArrowArrayStream.allocateNew(allocator)) {
       Data.exportArrayStream(allocator, reader, arrayStream);
+      LOG.log(
+          System.Logger.Level.DEBUG,
+          "Registering Arrow stream as view {0} with {1} rows",
+          new Object[] {tempTable, root.getRowCount()});
       connection.registerArrowStream(tempTable, arrayStream);
 
       // Build USING clause for PK
@@ -126,12 +137,19 @@ public final class DucklakeWriter implements AutoCloseable {
         sql.append("WHEN MATCHED THEN UPDATE SET ").append(updateSetClause).append(" ");
       }
       sql.append("WHEN NOT MATCHED THEN INSERT VALUES (").append(insertCols).append(")");
+
+      LOG.log(System.Logger.Level.DEBUG, "Executing MERGE: {0}", sql.toString());
       try (var ps = connection.prepareStatement(sql.toString())) {
-        ps.executeUpdate();
+        int affected = ps.executeUpdate();
+        LOG.log(
+            System.Logger.Level.INFO,
+            "MERGE affected {0} rows on table {1}",
+            new Object[] {affected, config.destinationTable()});
       }
     }
     try (var dropPs = connection.prepareStatement("DROP VIEW IF EXISTS " + tempTable)) {
       dropPs.executeUpdate();
+      LOG.log(System.Logger.Level.DEBUG, "Dropped temp view {0}", tempTable);
     }
   }
 

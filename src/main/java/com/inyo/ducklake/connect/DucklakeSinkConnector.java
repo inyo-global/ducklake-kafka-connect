@@ -61,7 +61,15 @@ public class DucklakeSinkConnector extends SinkConnector {
 
   @Override
   public Config validate(Map<String, String> connectorConfigs) {
-    return super.validate(connectorConfigs);
+    // The connector supports dynamic table-scoped properties like
+    // ducklake.table.<table>.id-columns etc. Kafka's ConfigDef-based
+    // validation treats unknown keys as errors, so filter out these
+    // dynamic keys before delegating to the standard validation.
+    Map<String, String> filtered = connectorConfigs.entrySet().stream()
+        .filter(e -> !e.getKey().startsWith("ducklake.table."))
+        .collect(java.util.stream.Collectors.toMap(java.util.Map.Entry::getKey, java.util.Map.Entry::getValue));
+
+    return super.validate(filtered);
   }
 
   @Override

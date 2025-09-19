@@ -4,14 +4,14 @@
     <option name="USE_PER_PROJECT_SETTINGS" value="true" />
     <code_scheme name="Project" version="173">
       <JavaCodeStyleSettings>
-        <!-- Configuração para evitar imports com wildcard (.* imports) -->
+        <!-- Configuration to avoid wildcard imports (.* imports) -->
         <option name="CLASS_COUNT_TO_USE_IMPORT_ON_DEMAND" value="999" />
         <option name="NAMES_COUNT_TO_USE_IMPORT_ON_DEMAND" value="999" />
         <option name="PACKAGES_TO_USE_IMPORT_ON_DEMAND">
           <value />
         </option>
 
-        <!-- Layout dos imports organizados -->
+        <!-- Organized import layout -->
         <option name="IMPORT_LAYOUT_TABLE">
           <value>
             <package name="java" withSubpackages="true" static="false" />
@@ -33,7 +33,7 @@
         <option name="RIGHT_MARGIN" value="120" />
         <option name="WRAP_LONG_LINES" value="true" />
 
-        <!-- Configurações de formatação que seguem o Google Java Format -->
+        <!-- Formatting settings that follow Google Java Format -->
         <option name="KEEP_LINE_BREAKS" value="false" />
         <option name="KEEP_FIRST_COLUMN_COMMENT" value="false" />
         <option name="KEEP_CONTROL_STATEMENT_IN_ONE_LINE" value="false" />
@@ -49,4 +49,3 @@
     </code_scheme>
   </component>
 </project>
-

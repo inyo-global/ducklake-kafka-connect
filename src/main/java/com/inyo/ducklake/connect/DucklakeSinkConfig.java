@@ -146,12 +146,14 @@ public class DucklakeSinkConfig extends AbstractConfig {
    */
   public String[] getTableIdColumns(String tableName) {
     String propertyKey = String.format(TABLE_ID_COLUMNS_PATTERN, tableName);
-    String value = getString(propertyKey);
-
-    if (value == null || value.trim().isEmpty()) {
+    Object raw = originals().get(propertyKey);
+    if (raw == null) {
       return new String[0];
     }
-
+    String value = raw.toString();
+    if (value.trim().isEmpty()) {
+      return new String[0];
+    }
     return Arrays.stream(value.split(","))
         .map(String::trim)
         .filter(s -> !s.isEmpty())
@@ -166,12 +168,14 @@ public class DucklakeSinkConfig extends AbstractConfig {
    */
   public String[] getTablePartitionByColumns(String tableName) {
     String propertyKey = String.format(TABLE_PARTITION_BY_PATTERN, tableName);
-    String value = getString(propertyKey);
-
-    if (value == null || value.trim().isEmpty()) {
+    Object raw = originals().get(propertyKey);
+    if (raw == null) {
       return new String[0];
     }
-
+    String value = raw.toString();
+    if (value.trim().isEmpty()) {
+      return new String[0];
+    }
     return Arrays.stream(value.split(","))
         .map(String::trim)
         .filter(s -> !s.isEmpty())
@@ -186,7 +190,11 @@ public class DucklakeSinkConfig extends AbstractConfig {
    */
   public boolean getTableAutoCreate(String tableName) {
     String propertyKey = String.format(TABLE_AUTO_CREATE_PATTERN, tableName);
-    return getBoolean(propertyKey);
+    Object raw = originals().get(propertyKey);
+    if (raw == null) {
+      return false;
+    }
+    return Boolean.parseBoolean(raw.toString());
   }
 
   /**
@@ -224,5 +232,17 @@ public class DucklakeSinkConfig extends AbstractConfig {
     return originals().containsKey(idColumnsKey)
         || originals().containsKey(partitionByKey)
         || originals().containsKey(autoCreateKey);
+  }
+
+  /**
+   * Returns a Map<String,String> suitable for posting as connector "config" payload.
+   * This converts the originals() map values to strings.
+   */
+  public Map<String, String> getConnectorConfigMap() {
+    Map<String, String> out = new java.util.HashMap<>();
+    for (Map.Entry<?, ?> e : originals().entrySet()) {
+      out.put(String.valueOf(e.getKey()), e.getValue() != null ? String.valueOf(e.getValue()) : "");
+    }
+    return out;
   }
 }

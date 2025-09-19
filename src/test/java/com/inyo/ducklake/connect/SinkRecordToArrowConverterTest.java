@@ -296,4 +296,46 @@ class SinkRecordToArrowConverterTest {
     assertEquals(TEST_ZIP_CODE, zip.get(FIRST_ELEMENT_INDEX));
     root.close();
   }
+
+  @Test
+  @DisplayName("Converts schemaless Map value by inferring schema")
+  void testSchemalessMapValue() {
+    // Given: a schemaless record where value is a Map
+    Map<String, Object> map = new LinkedHashMap<>();
+    map.put("id", TEST_ID_VALUE);
+    map.put("name", "dave");
+
+    // When
+    SinkRecord rec = new SinkRecord("topic", 0, null, null, null, map, 0);
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var root = converter.convertRecords(List.of(rec));
+
+    // Then
+    assertEquals(EXPECTED_ROW_COUNT, root.getRowCount());
+    IntVector idVec = (IntVector) root.getVector("id");
+    VarCharVector nameVec = (VarCharVector) root.getVector("name");
+    assertEquals(TEST_ID_VALUE, idVec.get(FIRST_ELEMENT_INDEX));
+    assertEquals("dave", new String(nameVec.get(FIRST_ELEMENT_INDEX), StandardCharsets.UTF_8));
+    root.close();
+  }
+
+  @Test
+  @DisplayName("Converts schemaless JSON string value by parsing and inferring schema")
+  void testSchemalessJsonStringValue() {
+    // Given: a schemaless record where value is a JSON string
+    String json = "{\"id\": 99, \"name\": \"eve\"}";
+
+    // When
+    SinkRecord rec = new SinkRecord("topic", 0, null, null, null, json, 0);
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var root = converter.convertRecords(List.of(rec));
+
+    // Then
+    assertEquals(EXPECTED_ROW_COUNT, root.getRowCount());
+    IntVector idVec = (IntVector) root.getVector("id");
+    VarCharVector nameVec = (VarCharVector) root.getVector("name");
+    assertEquals(99, idVec.get(FIRST_ELEMENT_INDEX));
+    assertEquals("eve", new String(nameVec.get(FIRST_ELEMENT_INDEX), StandardCharsets.UTF_8));
+    root.close();
+  }
 }
