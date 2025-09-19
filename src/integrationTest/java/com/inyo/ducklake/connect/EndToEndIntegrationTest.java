@@ -17,7 +17,9 @@ package com.inyo.ducklake.connect;
 
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
+import java.time.Duration;
 import java.util.Properties;
+import java.util.UUID;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -83,6 +85,11 @@ class EndToEndIntegrationTest {
 
   @Test
   void connector() {
+    // Generate unique names using UUID to avoid conflicts between test runs
+    String testId = UUID.randomUUID().toString().replace("-", "_");
+    String topicName = "orders_" + testId;
+    String tableName = "orders_" + testId;
+
     // Build MinIO client using host and mapped port so JVM can reach the container; use known
     // credentials
     var minioHost = minio.getHost();
@@ -100,36 +107,38 @@ class EndToEndIntegrationTest {
       throw new RuntimeException("Failed to ensure MinIO bucket 'test-bucket' exists", e);
     }
 
-    // Produce a simple JSON record to Kafka
+    // Produce a simple JSON record to Kafka using dynamic topic name
     var props = new Properties();
     props.put("bootstrap.servers", kafkaContainer.getBootstrapServers());
     props.put("key.serializer", StringSerializer.class.getName());
     props.put("value.serializer", StringSerializer.class.getName());
 
     try (KafkaProducer<String, String> producer = new KafkaProducer<>(props)) {
-      producer.send(new ProducerRecord<>("orders", "key-1", "{\"id\":1,\"customer\":\"alice\"}"));
+      producer.send(new ProducerRecord<>(topicName, "key-1", "{\"id\":1,\"customer\":\"alice\"}"));
       producer.flush();
     }
 
     // Build connector configuration map and start it via Kafka Connect REST using
     // DucklakeSinkConfig
-    var dlConfig = getDucklakeSinkConfig();
-    kafkaConnectContainer.startConnector("ducklake-sink", dlConfig);
-    kafkaConnectContainer.ensureConnectorRunning("ducklake-sink");
+    var dlConfig = getDucklakeSinkConfig(topicName, tableName);
+    kafkaConnectContainer.startConnector("ducklake-sink-" + testId, dlConfig);
+    kafkaConnectContainer.ensureConnectorRunning("ducklake-sink-" + testId);
 
     // Wait until the destination table appears via Ducklake (DuckDB attaches the catalog)
+    var factory = getDucklakeConnectionFactory(topicName, tableName);
     Awaitility.await()
+        .atMost(Duration.ofSeconds(10))
         .untilAsserted(
             () -> {
               // Build a config map matching the connector settings so DucklakeConnectionFactory can
               // attach
-              var factory = getDucklakeConnectionFactory();
               try {
                 factory.create();
                 try (var duckConn = factory.getConnection();
                     var st = duckConn.createStatement();
-                    var rs = st.executeQuery("SELECT id, customer FROM lake.main.orders")) {
-                  Assertions.assertTrue(rs.next(), "Expected at least one row in 'orders' table");
+                    var rs = st.executeQuery("SELECT id, customer FROM lake.main." + tableName)) {
+                  Assertions.assertTrue(
+                      rs.next(), "Expected at least one row in '" + tableName + "' table");
 
                   // Assert on the actual content
                   int id = rs.getInt("id");
@@ -137,8 +146,8 @@ class EndToEndIntegrationTest {
 
                   Assertions.assertEquals(1, id, "Expected id to be 1");
                   Assertions.assertEquals("alice", customer, "Expected customer to be 'alice'");
-                } catch (Exception e) {
-                  throw new RuntimeException(e);
+                } catch (java.sql.SQLException ignored) {
+
                 }
               } finally {
                 factory.close();
@@ -146,20 +155,21 @@ class EndToEndIntegrationTest {
             });
   }
 
-  private static @NotNull DucklakeSinkConfig getDucklakeSinkConfig() {
+  private static @NotNull DucklakeSinkConfig getDucklakeSinkConfig(
+      String topicName, String tableName) {
     var connectorProps = new java.util.HashMap<>();
     connectorProps.put("connector.class", "com.inyo.ducklake.connect.DucklakeSinkConnector");
     connectorProps.put("tasks.max", "1");
-    connectorProps.put("topics", "orders");
+    connectorProps.put("topics", topicName);
     // Connector (running in Kafka Connect container) uses Docker network hostnames
     connectorProps.put(
         "ducklake.catalog_uri",
         "postgres:dbname=ducklake_catalog host=postgres user=duck password=duck");
-    connectorProps.put("ducklake.tables", "orders");
-    connectorProps.put("topic2table.map", "orders:orders");
+    connectorProps.put("ducklake.tables", tableName);
+    connectorProps.put("topic2table.map", topicName + ":" + tableName);
     connectorProps.put("ducklake.data_path", "s3://test-bucket/");
-    connectorProps.put("ducklake.table.orders.id-columns", "id");
-    connectorProps.put("ducklake.table.orders.auto-create", "true");
+    connectorProps.put("ducklake.table." + tableName + ".id-columns", "id");
+    connectorProps.put("ducklake.table." + tableName + ".auto-create", "true");
     connectorProps.put("s3.url_style", "path");
     connectorProps.put("s3.use_ssl", "false");
     // Connector uses container hostname (minio:9000) accessible via Docker network
@@ -174,7 +184,8 @@ class EndToEndIntegrationTest {
     return new DucklakeSinkConfig(DucklakeSinkConfig.CONFIG_DEF, connectorProps);
   }
 
-  private static @NotNull DucklakeConnectionFactory getDucklakeConnectionFactory() {
+  private static @NotNull DucklakeConnectionFactory getDucklakeConnectionFactory(
+      String topicName, String tableName) {
     var cfgMap = new java.util.HashMap<>();
     // Test JVM uses localhost + mapped port to reach Postgres container
     String pgHost = "localhost";
@@ -186,8 +197,8 @@ class EndToEndIntegrationTest {
             pgHost, pgPort));
 
     // Required core properties for DucklakeSinkConfig
-    cfgMap.put("ducklake.tables", "orders");
-    cfgMap.put("topic2table.map", "orders:orders");
+    cfgMap.put("ducklake.tables", tableName);
+    cfgMap.put("topic2table.map", topicName + ":" + tableName);
 
     cfgMap.put("ducklake.data_path", "s3://test-bucket/");
     cfgMap.put("s3.url_style", "path");

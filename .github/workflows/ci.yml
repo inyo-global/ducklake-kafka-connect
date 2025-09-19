@@ -64,6 +64,74 @@ jobs:
           path: build/test-results/
           retention-days: 30
 
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Start Docker daemon
+        run: |
+          sudo systemctl start docker
+          sudo chmod 666 /var/run/docker.sock
+
+      - name: Run integration tests
+        run: ./gradlew integrationTest
+        env:
+          # Ensure Docker is available for Testcontainers
+          DOCKER_HOST: unix:///var/run/docker.sock
+
+      - name: Generate integration test report
+        uses: dorny/test-reporter@v1
+        if: success() || failure()
+        with:
+          name: Integration Test Results
+          path: build/test-results/integrationTest/*.xml
+          reporter: java-junit
+
+      - name: Upload integration test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: build/test-results/integrationTest/
+          retention-days: 30
+
+      - name: Upload integration test logs
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: integration-test-logs
+          path: |
+            build/reports/tests/integrationTest/
+            build/test-results/integrationTest/
+          retention-days: 7
+
   static-analysis:
     name: Static Analysis
     runs-on: ubuntu-latest
@@ -116,7 +184,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [test, static-analysis]
+    needs: [test, integration-test, static-analysis]
 
     steps:
       - name: Checkout code
@@ -142,7 +210,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build project
-        run: ./gradlew build -x test
+        run: ./gradlew build -x test -x integrationTest
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -262,4 +330,3 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
