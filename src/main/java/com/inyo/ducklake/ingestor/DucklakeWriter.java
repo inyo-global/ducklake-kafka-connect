@@ -59,11 +59,16 @@ public final class DucklakeWriter implements AutoCloseable {
           "Writing {0} rows to table {1}",
           new Object[] {root.getRowCount(), config.destinationTable()});
       tableManager.ensureTable(schema);
-      LOG.log(System.Logger.Level.DEBUG, "ensureTable completed for {0}", config.destinationTable());
+      LOG.log(
+          System.Logger.Level.DEBUG, "ensureTable completed for {0}", config.destinationTable());
       insertData(root);
       LOG.log(System.Logger.Level.INFO, "Write completed for table {0}", config.destinationTable());
     } catch (SQLException e) {
-      LOG.log(System.Logger.Level.ERROR, "Failed during write to {0}: {1}", config.destinationTable(), e.getMessage());
+      LOG.log(
+          System.Logger.Level.ERROR,
+          "Failed during write to {0}: {1}",
+          config.destinationTable(),
+          e.getMessage());
       throw new RuntimeException("Failed to write data to " + config.destinationTable(), e);
     }
   }

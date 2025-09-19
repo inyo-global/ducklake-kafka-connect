@@ -106,8 +106,7 @@ class DucklakeTableManagerTest {
 
     // Verify existence via DuckDB PRAGMA in catalog 'lake'
     try (PreparedStatement ps =
-        conn.prepareStatement(
-            "SELECT COUNT(*) FROM pragma_table_info(?)")) {
+        conn.prepareStatement("SELECT COUNT(*) FROM pragma_table_info(?)")) {
       ps.setString(1, "lake.main." + SqlIdentifierUtil.quote(tableName));
       try (ResultSet rs = ps.executeQuery()) {
         assertTrue(rs.next());
@@ -132,7 +131,8 @@ class DucklakeTableManagerTest {
   @DisplayName("Adds new column during evolution")
   void testAddNewColumnEvolution() throws Exception {
     String tableName = uniqueTableName("t3");
-    DucklakeWriterConfig cfg = new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
+    DucklakeWriterConfig cfg =
+        new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
     DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
     mgr.ensureTable(schema(intField("a", 32)));
     // Evolve adding new column
@@ -146,7 +146,8 @@ class DucklakeTableManagerTest {
   @DisplayName("Accepts integer width promotion (existing wider)")
   void testIntegerPromotion() throws Exception {
     String tableName = uniqueTableName("t4");
-    DucklakeWriterConfig cfg = new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
+    DucklakeWriterConfig cfg =
+        new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
     DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
     // create with BIGINT
     mgr.ensureTable(schema(intField("num", 64)));
@@ -160,7 +161,8 @@ class DucklakeTableManagerTest {
   @DisplayName("Rejects incompatible type")
   void testIncompatibleType() throws Exception {
     String tableName = uniqueTableName("t5");
-    DucklakeWriterConfig cfg = new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
+    DucklakeWriterConfig cfg =
+        new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
     DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
     // create with VARCHAR
     mgr.ensureTable(schema(stringField("c")));
@@ -174,7 +176,8 @@ class DucklakeTableManagerTest {
   @DisplayName("Does not add duplicate column")
   void testNoDuplicateAdd() throws Exception {
     String tableName = uniqueTableName("t6");
-    DucklakeWriterConfig cfg = new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
+    DucklakeWriterConfig cfg =
+        new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
     DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
     mgr.ensureTable(schema(intField("x", 32), stringField("y")));
     // same definition again
@@ -186,7 +189,8 @@ class DucklakeTableManagerTest {
   @DisplayName("Accepts expected FLOAT when existing is DOUBLE")
   void testFloatDoubleCompatibility() throws Exception {
     String tableName = uniqueTableName("t7");
-    DucklakeWriterConfig cfg = new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
+    DucklakeWriterConfig cfg =
+        new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
     DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
     mgr.ensureTable(schema(floatField("v", true))); // DOUBLE
     mgr.ensureTable(schema(floatField("v", false))); // expected FLOAT
@@ -367,7 +371,8 @@ class DucklakeTableManagerTest {
   }
 
   private void assertColumnType(String table, String column, String expectedType) throws Exception {
-    try (PreparedStatement ps = conn.prepareStatement("SELECT name, type FROM pragma_table_info(?)")) {
+    try (PreparedStatement ps =
+        conn.prepareStatement("SELECT name, type FROM pragma_table_info(?)")) {
       ps.setString(1, "lake.main." + SqlIdentifierUtil.quote(table));
       try (ResultSet rs = ps.executeQuery()) {
         boolean found = false;
@@ -383,7 +388,8 @@ class DucklakeTableManagerTest {
   }
 
   /**
-   * Generates a unique table name for each test to avoid conflicts when running tests multiple times.
+   * Generates a unique table name for each test to avoid conflicts when running tests multiple
+   * times.
    */
   private String uniqueTableName(String prefix) {
     return prefix + "_" + UUID.randomUUID().toString().replace("-", "_");

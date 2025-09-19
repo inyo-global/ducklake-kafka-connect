@@ -103,7 +103,7 @@ public class DucklakeSinkTask extends SinkTask {
         }
 
         try {
-           writer.write(vectorSchemaRoot);
+          writer.write(vectorSchemaRoot);
 
           LOG.log(
               System.Logger.Level.INFO,

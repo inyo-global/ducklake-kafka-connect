@@ -15,9 +15,9 @@
  */
 package com.inyo.ducklake.connect;
 
-import com.inyo.ducklake.ingestor.ArrowSchemaMerge;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.inyo.ducklake.ingestor.ArrowSchemaMerge;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
@@ -95,39 +95,54 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
 
     try {
       // Preprocess records: handle schemaless JSON strings/maps by inferring a Connect schema
-        records = records.stream()
-            .map(r1 -> {
-              if (r1.valueSchema() != null) return r1;
-              Object val = r1.value();
+      records =
+          records.stream()
+              .map(
+                  r1 -> {
+                    if (r1.valueSchema() != null) return r1;
+                    Object val = r1.value();
 
-              // If the value is a JSON string, try to parse it into a Map
-              if (val instanceof String s) {
-                try {
-                  Object parsed = JSON_MAPPER.readValue(s, new TypeReference<>() {});
-                  if (parsed instanceof Map<?, ?> mParsed) {
-                    val = mParsed;
-                  } else {
-                    return r1; // leave unchanged if not a map
-                  }
-                } catch (IOException ex) {
-                  return r1; // not JSON - leave unchanged
-                }
-              }
+                    // If the value is a JSON string, try to parse it into a Map
+                    if (val instanceof String s) {
+                      try {
+                        Object parsed = JSON_MAPPER.readValue(s, new TypeReference<>() {});
+                        if (parsed instanceof Map<?, ?> mParsed) {
+                          val = mParsed;
+                        } else {
+                          return r1; // leave unchanged if not a map
+                        }
+                      } catch (IOException ex) {
+                        return r1; // not JSON - leave unchanged
+                      }
+                    }
 
-              if (val instanceof Map<?, ?> mapVal) {
-                org.apache.kafka.connect.data.Schema inferred = inferSchemaFromObject(mapVal);
-                Struct struct = buildStructFromMap(mapVal, inferred);
-                return new SinkRecord(r1.topic(), r1.kafkaPartition(), r1.keySchema(), r1.key(), inferred, struct, r1.kafkaOffset());
-              }
-              return r1;
-            })
-            .collect(Collectors.toList());
+                    if (val instanceof Map<?, ?> mapVal) {
+                      org.apache.kafka.connect.data.Schema inferred = inferSchemaFromObject(mapVal);
+                      Struct struct = buildStructFromMap(mapVal, inferred);
+                      return new SinkRecord(
+                          r1.topic(),
+                          r1.kafkaPartition(),
+                          r1.keySchema(),
+                          r1.key(),
+                          inferred,
+                          struct,
+                          r1.kafkaOffset());
+                    }
+                    return r1;
+                  })
+              .collect(Collectors.toList());
 
-      // Debug: log valueSchema presence and value type for each record to diagnose empty schema list
+      // Debug: log valueSchema presence and value type for each record to diagnose empty schema
+      // list
       for (SinkRecord r : records) {
         try {
-          LOG.log(System.Logger.Level.INFO, "Record topic={0} partition={1} valueSchema={2} valueClass={3}",
-              r.topic(), r.kafkaPartition(), r.valueSchema(), r.value() != null ? r.value().getClass() : "null");
+          LOG.log(
+              System.Logger.Level.INFO,
+              "Record topic={0} partition={1} valueSchema={2} valueClass={3}",
+              r.topic(),
+              r.kafkaPartition(),
+              r.valueSchema(),
+              r.value() != null ? r.value().getClass() : "null");
         } catch (Exception e) {
           // ignore logging errors in tests
         }
@@ -425,7 +440,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       return sb.build();
     }
     if (example instanceof Collection<?> coll) {
-      org.apache.kafka.connect.data.Schema elemSchema = org.apache.kafka.connect.data.SchemaBuilder.string().optional().build();
+      org.apache.kafka.connect.data.Schema elemSchema =
+          org.apache.kafka.connect.data.SchemaBuilder.string().optional().build();
       for (Object o : coll) {
         if (o != null) {
           elemSchema = inferSchemaFromObject(o);

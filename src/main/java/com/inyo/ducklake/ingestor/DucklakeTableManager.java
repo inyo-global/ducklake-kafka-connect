@@ -91,7 +91,8 @@ public final class DucklakeTableManager {
 
   public boolean tableExists(String table) {
     // Use PRAGMA table_info to check existence within attached catalog 'lake'
-    final var tableName = "lake.main." + SqlIdentifierUtil.quote(safeIdentifier(config.destinationTable()));
+    final var tableName =
+        "lake.main." + SqlIdentifierUtil.quote(safeIdentifier(config.destinationTable()));
     final var sql = String.format("pragma table_info(%s)", tableName);
     try (PreparedStatement ps = connection.prepareStatement(sql)) {
       try (ResultSet rs = ps.executeQuery()) {
@@ -99,7 +100,11 @@ public final class DucklakeTableManager {
       }
     } catch (SQLException e) {
       // If table does not exist, DuckDB may raise a Catalog Error; treat as non-existent
-      LOG.log(System.Logger.Level.DEBUG, "tableExists({0}) via PRAGMA failed: {1}", table, e.getMessage());
+      LOG.log(
+          System.Logger.Level.DEBUG,
+          "tableExists({0}) via PRAGMA failed: {1}",
+          table,
+          e.getMessage());
       return false;
     }
   }
@@ -124,7 +129,10 @@ public final class DucklakeTableManager {
             .map(f -> SqlIdentifierUtil.quote(f.getName()) + " " + toDuckDBType(f.getType()))
             .collect(Collectors.joining(", "));
     StringBuilder ddl = new StringBuilder();
-    ddl.append("CREATE TABLE ").append("lake.main.").append(SqlIdentifierUtil.quote(tableName)).append(" (");
+    ddl.append("CREATE TABLE ")
+        .append("lake.main.")
+        .append(SqlIdentifierUtil.quote(tableName))
+        .append(" (");
     ddl.append(cols);
     // PRIMARY KEY constraints are not supported in DuckLake, removing the constraint definition
     ddl.append(")");

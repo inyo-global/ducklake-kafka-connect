@@ -235,8 +235,8 @@ public class DucklakeSinkConfig extends AbstractConfig {
   }
 
   /**
-   * Returns a Map<String,String> suitable for posting as connector "config" payload.
-   * This converts the originals() map values to strings.
+   * Returns a Map<String,String> suitable for posting as connector "config" payload. This converts
+   * the originals() map values to strings.
    */
   public Map<String, String> getConnectorConfigMap() {
     Map<String, String> out = new java.util.HashMap<>();

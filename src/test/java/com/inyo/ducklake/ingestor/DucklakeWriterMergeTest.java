@@ -73,7 +73,8 @@ class DucklakeWriterMergeTest {
   }
 
   private int tableCount(String table) throws Exception {
-    try (PreparedStatement ps = conn.prepareStatement("SELECT COUNT(*) FROM lake.main." + SqlIdentifierUtil.quote(table))) {
+    try (PreparedStatement ps =
+        conn.prepareStatement("SELECT COUNT(*) FROM lake.main." + SqlIdentifierUtil.quote(table))) {
       try (ResultSet rs = ps.executeQuery()) {
         rs.next();
         return rs.getInt(1);
@@ -83,7 +84,8 @@ class DucklakeWriterMergeTest {
 
   private String nameForId(String table, int id) throws Exception {
     try (PreparedStatement ps =
-        conn.prepareStatement("SELECT name FROM lake.main." + SqlIdentifierUtil.quote(table) + " WHERE id=?")) {
+        conn.prepareStatement(
+            "SELECT name FROM lake.main." + SqlIdentifierUtil.quote(table) + " WHERE id=?")) {
       ps.setInt(1, id);
       try (ResultSet rs = ps.executeQuery()) {
         return rs.next() ? rs.getString(1) : null;
