@@ -133,11 +133,16 @@ spotless {
 }
 
 dependencies {
-    implementation("org.duckdb:duckdb_jdbc:1.3.2.1")
+    implementation("org.duckdb:duckdb_jdbc:1.4.0.0")
     implementation("org.apache.arrow:arrow-vector:18.3.0") {
         exclude(group = "org.slf4j")
     }
+    implementation("org.apache.arrow:arrow-c-data:18.3.0") {
+        exclude(group = "org.slf4j")
+    }
     implementation("org.apache.arrow:arrow-memory-unsafe:18.3.0")
+    implementation("org.apache.arrow.adbc:adbc-core:0.20.0")
+    implementation("org.apache.arrow.adbc:adbc-driver-jdbc:0.20.0")
 
     compileOnly("org.apache.kafka:kafka-clients:4.0.0")
     compileOnly("org.apache.kafka:connect-api:4.0.0")
@@ -150,5 +155,6 @@ dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("org.apache.kafka:connect-api:4.0.0")
 
-    add("integrationTestImplementation", "org.testcontainers:kafka:1.20.1")
+    add("integrationTestImplementation", "org.testcontainers:kafka:1.21.3")
+    add("integrationTestImplementation", "org.testcontainers:postgresql:1.21.3")
 }

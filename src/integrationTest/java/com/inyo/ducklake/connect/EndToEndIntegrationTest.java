@@ -16,55 +16,65 @@
 package com.inyo.ducklake.connect;
 
 import java.util.stream.Stream;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.Network;
+import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.lifecycle.Startables;
 
 class EndToEndIntegrationTest {
 
-  private static Network network;
-  private static KafkaContainer kafkaContainer;
-  private static KafkaConnectContainer kafkaConnectContainer;
+    private static Network network;
+    private static KafkaContainer kafkaContainer;
+    private static KafkaConnectContainer kafkaConnectContainer;
+    private static PostgreSQLContainer<?> postgres;
 
-  @BeforeAll
-  public static void setUp() {
-    network = Network.newNetwork();
+    @BeforeAll
+    public static void setUp() {
+        network = Network.newNetwork();
 
-    kafkaContainer =
-        new KafkaContainer("apache/kafka-native:4.0.0")
-            .withNetwork(network)
-            .withNetworkAliases("kafka");
-    kafkaContainer.start();
+        kafkaContainer =
+                new KafkaContainer("apache/kafka-native:4.0.0")
+                        .withNetwork(network)
+                        .withNetworkAliases("kafka");
+        kafkaContainer.start();
 
-    kafkaConnectContainer = new KafkaConnectContainer();
-    kafkaConnectContainer
-        .withNetwork(network)
-        .dependsOn(kafkaContainer)
-        .withEnv("CONNECT_BOOTSTRAP_SERVERS", "kafka:9093")
-        .withEnv("CONNECT_OFFSET_FLUSH_INTERVAL_MS", "500");
+        kafkaConnectContainer = new KafkaConnectContainer();
+        kafkaConnectContainer
+                .withNetwork(network)
+                .dependsOn(kafkaContainer)
+                .withEnv("CONNECT_BOOTSTRAP_SERVERS", "kafka:9093")
+                .withEnv("CONNECT_OFFSET_FLUSH_INTERVAL_MS", "500");
 
-    Startables.deepStart(Stream.of(kafkaContainer, kafkaConnectContainer)).join();
-  }
+        postgres = new PostgreSQLContainer<>("postgres:17")
+                .withNetwork(network);
 
-  @AfterAll
-  public static void tearDown() {
-    if (kafkaContainer != null) {
-      kafkaContainer.stop();
+        Startables.deepStart(Stream.of(kafkaContainer, kafkaConnectContainer)).join();
     }
-    if (kafkaConnectContainer != null) {
-      kafkaConnectContainer.stop();
-    }
-    if (network != null) {
-      network.close();
-    }
-  }
 
-  @Test
-  void connector() {
-    Assertions.assertTrue(true);
-  }
+    @AfterAll
+    public static void tearDown() {
+        if (kafkaContainer != null) {
+            kafkaContainer.stop();
+        }
+        if (kafkaConnectContainer != null) {
+            kafkaConnectContainer.stop();
+        }
+        if (network != null) {
+            network.close();
+        }
+
+        if (postgres != null) {
+            postgres.stop();
+        }
+    }
+
+    @Test
+    void connector() {
+        Assertions.assertTrue(true);
+    }
 }
