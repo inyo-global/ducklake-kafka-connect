@@ -86,13 +86,12 @@ public final class DucklakeTableManager {
 
   private String qualifiedTableRef() {
     // Catalog alias 'lake', default schema 'main', quote only the table identifier
-    return "lake.main." + SqlIdentifierUtil.quote(safeIdentifier(config.destinationTable()));
+    return "lake.main." + SqlIdentifierUtil.quote(config.destinationTable());
   }
 
   public boolean tableExists(String table) {
     // Use PRAGMA table_info to check existence within attached catalog 'lake'
-    final var tableName =
-        "lake.main." + SqlIdentifierUtil.quote(safeIdentifier(config.destinationTable()));
+    final var tableName = "lake.main." + SqlIdentifierUtil.quote(config.destinationTable());
     final var sql = String.format("pragma table_info(%s)", tableName);
     try (PreparedStatement ps = connection.prepareStatement(sql)) {
       try (ResultSet rs = ps.executeQuery()) {
@@ -109,21 +108,12 @@ public final class DucklakeTableManager {
     }
   }
 
-  // safeIdentifier agora centralizado em SqlIdentifierUtil
-  private String safeIdentifier(String raw) {
-    return SqlIdentifierUtil.safeIdentifier(raw);
-  }
-
   @SuppressFBWarnings(
       value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
       justification =
-          "Identifiers sanitized via SqlIdentifierUtil.safeIdentifier; "
+          "Identifiers quoted via SqlIdentifierUtil.quote; "
               + "PreparedStatement cannot parameterize DDL identifiers.")
   private void createTable(Schema arrowSchema) throws SQLException {
-    final var tableName = safeIdentifier(config.destinationTable());
-    for (Field f : arrowSchema.getFields()) {
-      safeIdentifier(f.getName());
-    }
     String cols =
         arrowSchema.getFields().stream()
             .map(f -> SqlIdentifierUtil.quote(f.getName()) + " " + toDuckDBType(f.getType()))
@@ -131,7 +121,7 @@ public final class DucklakeTableManager {
     StringBuilder ddl = new StringBuilder();
     ddl.append("CREATE TABLE ")
         .append("lake.main.")
-        .append(SqlIdentifierUtil.quote(tableName))
+        .append(SqlIdentifierUtil.quote(config.destinationTable()))
         .append(" (");
     ddl.append(cols);
     // PRIMARY KEY constraints are not supported in DuckLake, removing the constraint definition
@@ -148,15 +138,13 @@ public final class DucklakeTableManager {
 
   @SuppressFBWarnings(
       value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
-      justification =
-          "DDL evolve validated: identifiers sanitized via SqlIdentifierUtil.safeIdentifier.")
+      justification = "DDL evolve validated: identifiers quoted via SqlIdentifierUtil.quote.")
   private void evolveTableSchema(Schema arrowSchema) throws SQLException {
     Map<String, ColumnMeta> existing = loadExistingTableMeta();
     List<Field> fields = arrowSchema.getFields();
     List<Field> newColumns = new ArrayList<>();
     for (Field field : fields) {
       String colNameLower = field.getName().toLowerCase(Locale.ROOT);
-      safeIdentifier(field.getName());
       ColumnMeta meta = existing.get(colNameLower);
       if (meta == null) {
         newColumns.add(field);
@@ -181,13 +169,12 @@ public final class DucklakeTableManager {
     }
     if (!newColumns.isEmpty()) {
       for (Field nf : newColumns) {
-        String col = safeIdentifier(nf.getName());
         String newType = toDuckDBType(nf.getType());
         String ddl =
             "ALTER TABLE "
                 + qualifiedTableRef()
                 + " ADD COLUMN "
-                + SqlIdentifierUtil.quote(col)
+                + SqlIdentifierUtil.quote(nf.getName())
                 + " "
                 + newType;
         LOG.log(System.Logger.Level.INFO, "Adding new column: {0}", ddl);
@@ -195,7 +182,7 @@ public final class DucklakeTableManager {
           st.execute(ddl);
         }
         if (cachedMeta != null) {
-          cachedMeta.put(col.toLowerCase(Locale.ROOT), new ColumnMeta(newType));
+          cachedMeta.put(nf.getName().toLowerCase(Locale.ROOT), new ColumnMeta(newType));
         }
       }
     }
@@ -228,14 +215,13 @@ public final class DucklakeTableManager {
 
   @SuppressFBWarnings(
       value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
-      justification = "Identifiers validated via SqlIdentifierUtil.safeIdentifier.")
+      justification = "Identifiers quoted via SqlIdentifierUtil.quote.")
   private void performTypeUpgrade(String columnName, String newType) throws SQLException {
-    String col = safeIdentifier(columnName);
     String ddl =
         "ALTER TABLE "
             + qualifiedTableRef()
             + " ALTER COLUMN "
-            + SqlIdentifierUtil.quote(col)
+            + SqlIdentifierUtil.quote(columnName)
             + " SET DATA TYPE "
             + newType;
     LOG.log(System.Logger.Level.INFO, "Upgrading column type: {0}", ddl);
@@ -243,7 +229,7 @@ public final class DucklakeTableManager {
       st.execute(ddl);
     }
     if (cachedMeta != null) {
-      cachedMeta.put(col.toLowerCase(Locale.ROOT), new ColumnMeta(newType));
+      cachedMeta.put(columnName.toLowerCase(Locale.ROOT), new ColumnMeta(newType));
     }
   }
 

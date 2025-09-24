@@ -57,7 +57,8 @@ public final class DucklakeWriter implements AutoCloseable {
       LOG.log(
           System.Logger.Level.INFO,
           "Writing {0} rows to table {1}",
-          new Object[] {root.getRowCount(), config.destinationTable()});
+          root.getRowCount(),
+          config.destinationTable());
       tableManager.ensureTable(schema);
       LOG.log(
           System.Logger.Level.DEBUG, "ensureTable completed for {0}", config.destinationTable());
@@ -75,11 +76,6 @@ public final class DucklakeWriter implements AutoCloseable {
 
   private void insertData(VectorSchemaRoot root) throws SQLException {
     var fields = root.getSchema().getFields();
-    for (var f : fields) {
-      SqlIdentifierUtil.safeIdentifier(f.getName());
-    }
-    SqlIdentifierUtil.safeIdentifier(config.destinationTable());
-
     var pkCols = config.tableIdColumns();
     // If there are PK columns, always use MERGE INTO logic
     upsertWithMergeInto(root, fields, pkCols);
@@ -149,7 +145,8 @@ public final class DucklakeWriter implements AutoCloseable {
         LOG.log(
             System.Logger.Level.INFO,
             "MERGE affected {0} rows on table {1}",
-            new Object[] {affected, config.destinationTable()});
+            affected,
+            config.destinationTable());
       }
     }
     try (var dropPs = connection.prepareStatement("DROP VIEW IF EXISTS " + tempTable)) {
