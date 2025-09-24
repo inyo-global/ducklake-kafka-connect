@@ -17,12 +17,15 @@ package com.inyo.ducklake.connect;
 
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
+import java.sql.SQLException;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringSerializer;
+import org.apache.kafka.connect.runtime.rest.entities.ConnectorStateInfo;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assertions;
@@ -39,20 +42,13 @@ import org.testcontainers.shaded.org.awaitility.Awaitility;
 class EndToEndIntegrationTest {
 
   private static final Network network = Network.newNetwork();
+  private static EmbeddedKafkaConnect embeddedKafkaConnect;
 
   @Container
   public static final KafkaContainer kafkaContainer =
       new KafkaContainer("apache/kafka-native:4.0.0")
           .withNetwork(network)
           .withNetworkAliases("kafka");
-
-  @Container
-  public static final KafkaConnectContainer kafkaConnectContainer =
-      new KafkaConnectContainer()
-          .withNetwork(network)
-          .dependsOn(kafkaContainer)
-          .withEnv("CONNECT_BOOTSTRAP_SERVERS", "kafka:9093")
-          .withEnv("CONNECT_OFFSET_FLUSH_INTERVAL_MS", "500");
 
   @Container
   @SuppressWarnings("resource")
@@ -77,6 +73,11 @@ class EndToEndIntegrationTest {
 
   @AfterAll
   public static void tearDown() {
+    // Stop embedded Kafka Connect
+    if (embeddedKafkaConnect != null) {
+      embeddedKafkaConnect.stop();
+    }
+
     // Testcontainers manages container lifecycle; close shared network
     if (network != null) {
       network.close();
@@ -85,6 +86,11 @@ class EndToEndIntegrationTest {
 
   @Test
   void connector() {
+
+    // Start embedded Kafka Connect
+    embeddedKafkaConnect = new EmbeddedKafkaConnect(kafkaContainer.getBootstrapServers());
+    embeddedKafkaConnect.start();
+
     // Generate unique names using UUID to avoid conflicts between test runs
     String testId = UUID.randomUUID().toString().replace("-", "_");
     String topicName = "orders_" + testId;
@@ -118,53 +124,123 @@ class EndToEndIntegrationTest {
       producer.flush();
     }
 
-    // Build connector configuration map and start it via Kafka Connect REST using
-    // DucklakeSinkConfig
-    var dlConfig = getDucklakeSinkConfig(topicName, tableName);
-    kafkaConnectContainer.startConnector("ducklake-sink-" + testId, dlConfig);
-    kafkaConnectContainer.ensureConnectorRunning("ducklake-sink-" + testId);
+    // Create connector configuration and start it via embedded Kafka Connect
+    var connectorConfig = getConnectorConfigMap(topicName, tableName);
+    embeddedKafkaConnect.createConnector("ducklake-sink-" + testId, connectorConfig);
+    embeddedKafkaConnect.ensureConnectorRunning("ducklake-sink-" + testId);
 
-    // Wait until the destination table appears via Ducklake (DuckDB attaches the catalog)
-    var factory = getDucklakeConnectionFactory(topicName, tableName);
-    Awaitility.await()
+    // Wait for connector to be running properly first (fast check with short timeout)
+    String connectorName = "ducklake-sink-" + testId;
+    Awaitility.await("Connector to be running")
         .atMost(Duration.ofSeconds(10))
-        .untilAsserted(
-            () -> {
-              // Build a config map matching the connector settings so DucklakeConnectionFactory can
-              // attach
-              try {
-                factory.create();
-                try (var duckConn = factory.getConnection();
-                    var st = duckConn.createStatement();
-                    var rs = st.executeQuery("SELECT id, customer FROM lake.main." + tableName)) {
-                  Assertions.assertTrue(
-                      rs.next(), "Expected at least one row in '" + tableName + "' table");
+        .pollInterval(Duration.ofMillis(500))
+        .untilAsserted(() -> assertConnectorRunning(connectorName));
 
-                  // Assert on the actual content
-                  int id = rs.getInt("id");
-                  String customer = rs.getString("customer");
-
-                  Assertions.assertEquals(1, id, "Expected id to be 1");
-                  Assertions.assertEquals("alice", customer, "Expected customer to be 'alice'");
-                } catch (java.sql.SQLException ignored) {
-
-                }
-              } finally {
-                factory.close();
-              }
-            });
+    // Then wait for data to be processed and inserted (longer timeout for data processing)
+    var factory = getDucklakeConnectionFactory(topicName, tableName);
+    Awaitility.await("Data to be inserted into table")
+        .atMost(Duration.ofSeconds(60))
+        .pollInterval(Duration.ofSeconds(2))
+        .ignoreExceptions() // Ignore table-not-found exceptions during async creation
+        .untilAsserted(() -> assertTableDataExists(factory, tableName));
   }
 
-  private static @NotNull DucklakeSinkConfig getDucklakeSinkConfig(
+  private static void assertConnectorRunning(String connectorName) {
+    if (embeddedKafkaConnect == null) {
+      throw new RuntimeException("EmbeddedKafkaConnect is not initialized");
+    }
+
+    try {
+      var status = embeddedKafkaConnect.getConnectorStatus(connectorName);
+
+      // Assert connector state is RUNNING
+      String connectorState = status.connector().state();
+      if ("FAILED".equals(connectorState)) {
+        throw new RuntimeException("Connector failed: " + status.connector().trace());
+      }
+      Assertions.assertEquals(
+          "RUNNING",
+          connectorState,
+          "Connector should be in RUNNING state but was: " + connectorState);
+
+      // Assert all tasks are RUNNING
+      boolean anyTaskFailed =
+          status.tasks().stream().anyMatch(task -> "FAILED".equals(task.state()));
+      if (anyTaskFailed) {
+        var failedTask =
+            status.tasks().stream()
+                .filter(task -> "FAILED".equals(task.state()))
+                .findFirst()
+                .orElse(null);
+        if (failedTask != null) {
+          throw new RuntimeException("Connector task failed: " + failedTask.trace());
+        }
+      }
+
+      boolean allTasksRunning =
+          status.tasks().stream().allMatch(task -> "RUNNING".equals(task.state()));
+      Assertions.assertTrue(
+          allTasksRunning,
+          "All connector tasks should be RUNNING. Current tasks states: "
+              + status.tasks().stream().map(ConnectorStateInfo.AbstractState::state).toList());
+
+    } catch (Exception e) {
+      if (e instanceof RuntimeException) {
+        throw e;
+      }
+      throw new RuntimeException("Failed to check connector status: " + e.getMessage(), e);
+    }
+  }
+
+  private static void assertTableDataExists(DucklakeConnectionFactory factory, String tableName) {
+    try {
+      factory.create();
+      try (var duckConn = factory.getConnection();
+          var st = duckConn.createStatement();
+          var rs = st.executeQuery("SELECT id, customer FROM lake.main." + tableName)) {
+
+        Assertions.assertTrue(rs.next(), "Expected at least one row in table " + tableName);
+
+        int id = rs.getInt("id");
+        String customer = rs.getString("customer");
+
+        Assertions.assertEquals(1, id, "Expected id to be 1");
+        Assertions.assertEquals("alice", customer, "Expected customer to be 'alice'");
+      }
+    } catch (SQLException e) {
+      // Check if this is a "table doesn't exist" error (expected during async creation)
+      if (e.getMessage().contains("does not exist")) {
+        // This is expected - table is being created asynchronously
+        throw new AssertionError("Table not ready yet: " + e.getMessage(), e);
+      } else {
+        // This is a real SQL error (connection, syntax, etc.) - fail immediately
+        throw new RuntimeException("SQL configuration error: " + e.getMessage(), e);
+      }
+    } catch (Exception e) {
+      // Connection or other configuration errors - fail immediately
+      throw new RuntimeException("Configuration error during data assertion: " + e.getMessage(), e);
+    } finally {
+      factory.close();
+    }
+  }
+
+  private static @NotNull Map<String, String> getConnectorConfigMap(
       String topicName, String tableName) {
-    var connectorProps = new java.util.HashMap<>();
+    var connectorProps = new java.util.HashMap<String, String>();
     connectorProps.put("connector.class", "com.inyo.ducklake.connect.DucklakeSinkConnector");
+    connectorProps.put("name", "ducklake-sink"); // Add the required name field
     connectorProps.put("tasks.max", "1");
     connectorProps.put("topics", topicName);
-    // Connector (running in Kafka Connect container) uses Docker network hostnames
+
+    // Use mapped ports since embedded Kafka Connect runs in the same JVM as the test
+    String pgHost = postgres.getHost();
+    Integer pgPort = postgres.getMappedPort(5432);
     connectorProps.put(
         "ducklake.catalog_uri",
-        "postgres:dbname=ducklake_catalog host=postgres user=duck password=duck");
+        String.format(
+            "postgres:dbname=ducklake_catalog host=%s port=%d user=duck password=duck",
+            pgHost, pgPort));
+
     connectorProps.put("ducklake.tables", tableName);
     connectorProps.put("topic2table.map", topicName + ":" + tableName);
     connectorProps.put("ducklake.data_path", "s3://test-bucket/");
@@ -172,23 +248,22 @@ class EndToEndIntegrationTest {
     connectorProps.put("ducklake.table." + tableName + ".auto-create", "true");
     connectorProps.put("s3.url_style", "path");
     connectorProps.put("s3.use_ssl", "false");
-    // Connector uses container hostname (minio:9000) accessible via Docker network
-    connectorProps.put("s3.endpoint", "minio:9000");
+
+    // Use mapped ports for MinIO
+    String minioHost = minio.getHost();
+    Integer minioPort = minio.getMappedPort(9000);
+    connectorProps.put("s3.endpoint", String.format("%s:%d", minioHost, minioPort));
     connectorProps.put("s3.access_key_id", "minio");
     connectorProps.put("s3._secret_access_key", "minio123");
-    connectorProps.put("key.converter", "org.apache.kafka.connect.storage.StringConverter");
-    connectorProps.put("key.converter.schemas.enable", "false");
-    connectorProps.put("value.converter", "org.apache.kafka.connect.json.JsonConverter");
-    connectorProps.put("value.converter.schemas.enable", "false");
 
-    return new DucklakeSinkConfig(DucklakeSinkConfig.CONFIG_DEF, connectorProps);
+    return connectorProps;
   }
 
   private static @NotNull DucklakeConnectionFactory getDucklakeConnectionFactory(
       String topicName, String tableName) {
-    var cfgMap = new java.util.HashMap<>();
+    var cfgMap = new java.util.HashMap<String, String>();
     // Test JVM uses localhost + mapped port to reach Postgres container
-    String pgHost = "localhost";
+    String pgHost = postgres.getHost();
     Integer pgPort = postgres.getMappedPort(5432);
     cfgMap.put(
         DucklakeSinkConfig.DUCKLAKE_CATALOG_URI,
@@ -204,7 +279,7 @@ class EndToEndIntegrationTest {
     cfgMap.put("s3.url_style", "path");
     cfgMap.put("s3.use_ssl", "false");
     // Test JVM uses localhost + mapped port to reach MinIO container
-    String minioHost = "localhost";
+    String minioHost = minio.getHost();
     Integer minioPort = minio.getMappedPort(9000);
     cfgMap.put("s3.endpoint", String.format("%s:%d", minioHost, minioPort));
     cfgMap.put("s3.access_key_id", "minio");

@@ -51,9 +51,19 @@ val integrationTest by tasks.registering(Test::class) {
 
     dependsOn(tasks.installDist)
 
-    systemProperty("distribution.path", layout.buildDirectory.dir("install").get().asFile.absolutePath)
+    systemProperty("distribution.path", layout.buildDirectory.dir("install/ducklake-kafka-connect").get().asFile.absolutePath)
 
     useJUnitPlatform()
+
+    // Add JVM arguments required for Apache Arrow
+    jvmArgs("--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED")
+    jvmArgs("--add-opens=java.base/java.nio=ALL-UNNAMED")
+
+    // Enable debugging
+    debug = project.hasProperty("debug")
+    if (debug) {
+        jvmArgs("-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005")
+    }
 }
 
 val processManifest by tasks.registering(Copy::class) {
@@ -159,4 +169,14 @@ dependencies {
     add("integrationTestImplementation", "org.testcontainers:postgresql:1.21.3")
     add("integrationTestImplementation", "org.testcontainers:minio:1.21.3")
     add("integrationTestImplementation", "org.testcontainers:junit-jupiter:1.21.3")
+    add("integrationTestImplementation", "org.apache.kafka:connect-runtime:4.0.0")
+    add("integrationTestImplementation", "org.apache.kafka:connect-file:4.0.0")
+    add("integrationTestImplementation", "org.apache.kafka:connect-json:4.0.0")
+    add("integrationTestImplementation", "org.apache.kafka:kafka-clients:4.0.0")
+    add("integrationTestImplementation", "org.slf4j:slf4j-simple:2.0.9")
+}
+
+// Configure duplicate strategy for integration test resources
+tasks.named<ProcessResources>("processIntegrationTestResources") {
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
 }

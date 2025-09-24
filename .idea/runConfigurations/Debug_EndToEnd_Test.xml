@@ -1,0 +1,22 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Debug EndToEnd Test" type="JUnit" factoryName="JUnit">
+    <module name="ducklake-kafka-connect.integrationTest" />
+    <extension name="coverage">
+      <pattern>
+        <option name="PATTERN" value="com.inyo.ducklake.connect.*" />
+        <option name="ENABLED" value="true" />
+      </pattern>
+    </extension>
+    <option name="PACKAGE_NAME" value="com.inyo.ducklake.connect" />
+    <option name="MAIN_CLASS_NAME" value="com.inyo.ducklake.connect.EndToEndIntegrationTest" />
+    <option name="METHOD_NAME" value="connector" />
+    <option name="TEST_OBJECT" value="method" />
+    <option name="VM_PARAMETERS" value="--add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED -Ddistribution.path=$MODULE_DIR$/build/install" />
+    <option name="WORKING_DIRECTORY" value="$MODULE_WORKING_DIR$" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+      <option name="Gradle.BeforeRunTask" enabled="true" tasks="installDist" externalProjectPath="$PROJECT_DIR$" />
+    </method>
+  </configuration>
+</component>
+
