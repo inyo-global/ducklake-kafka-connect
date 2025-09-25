@@ -109,9 +109,9 @@ public class TopicToTableValidator implements ConfigDef.Validator {
       if (!isValidTable(table)) {
         LOG.log(
             System.Logger.Level.ERROR,
-            "table name {} should have at least 2 "
-                + "characters, start with _a-zA-Z, and only contains "
-                + "_$a-zA-z0-9",
+            "table name {} should have at least 1 "
+                + "character, start with _a-zA-Z, and only contains "
+                + "_a-zA-z0-9- (hyphens allowed)",
             table);
         isInvalid = true;
       }
@@ -134,6 +134,8 @@ public class TopicToTableValidator implements ConfigDef.Validator {
   }
 
   private static boolean isValidTable(String table) {
-    return table.matches("^[a-zA-Z_][a-zA-Z0-9_]+$");
+    // Allow hyphens in table names since DuckDB supports them when quoted
+    // Updated pattern to include hyphens: [a-zA-Z_][a-zA-Z0-9_-]*
+    return table.matches("^[a-zA-Z_][a-zA-Z0-9_-]*$");
   }
 }

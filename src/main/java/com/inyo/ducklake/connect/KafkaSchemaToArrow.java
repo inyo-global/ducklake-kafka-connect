@@ -37,29 +37,30 @@ public class KafkaSchemaToArrow {
 
   private static org.apache.arrow.vector.types.pojo.Field convertField(Field kafkaField) {
     String name = kafkaField.name();
-    Schema.Type type = kafkaField.schema().type();
+    Schema kafkaSchema = kafkaField.schema();
+    Schema.Type type = kafkaSchema.type();
 
-    FieldType fieldType = new FieldType(kafkaField.schema().isOptional(), toArrowType(type), null);
+    FieldType fieldType = new FieldType(kafkaSchema.isOptional(), toArrowType(kafkaSchema), null);
 
     if (type == Schema.Type.STRUCT) {
       var children =
-          kafkaField.schema().fields().stream()
+          kafkaSchema.fields().stream()
               .map(KafkaSchemaToArrow::convertField)
               .collect(Collectors.toList());
       return new org.apache.arrow.vector.types.pojo.Field(name, fieldType, children);
     }
 
     if (type == Schema.Type.ARRAY) {
-      var elementField = convertField(new Field("element", 0, kafkaField.schema().valueSchema()));
+      var elementField = convertField(new Field("element", 0, kafkaSchema.valueSchema()));
       return new org.apache.arrow.vector.types.pojo.Field(name, fieldType, List.of(elementField));
     }
 
     if (type == Schema.Type.MAP) {
-      var keyFieldSchema = kafkaField.schema().keySchema();
-      var valueFieldSchema = kafkaField.schema().valueSchema();
+      var keyFieldSchema = kafkaSchema.keySchema();
+      var valueFieldSchema = kafkaSchema.valueSchema();
       var arrowKeyField =
           new org.apache.arrow.vector.types.pojo.Field(
-              "key", new FieldType(false, toArrowType(keyFieldSchema.type()), null), null);
+              "key", new FieldType(false, toArrowType(keyFieldSchema), null), null);
       // Use recursive conversion for value to capture nested children (STRUCT / ARRAY / MAP)
       org.apache.arrow.vector.types.pojo.Field arrowValueField;
       if (valueFieldSchema.type() == Schema.Type.STRUCT
@@ -71,7 +72,7 @@ public class KafkaSchemaToArrow {
             new org.apache.arrow.vector.types.pojo.Field(
                 "value",
                 new FieldType(
-                    valueFieldSchema.isOptional(), toArrowType(valueFieldSchema.type()), null),
+                    valueFieldSchema.isOptional(), toArrowType(valueFieldSchema), null),
                 null);
       }
       var entriesStruct =
@@ -100,5 +101,29 @@ public class KafkaSchemaToArrow {
       case MAP -> new ArrowType.Map(true);
       case STRUCT -> ArrowType.Struct.INSTANCE;
     };
+  }
+
+  /**
+   * Convert Kafka Connect schema types to Arrow types, with special handling for logical types like timestamps
+   */
+  private static ArrowType toArrowType(Schema kafkaSchema) {
+    // Handle logical types first
+    if (kafkaSchema.name() != null) {
+      switch (kafkaSchema.name()) {
+        case "org.apache.kafka.connect.data.Timestamp" -> {
+          // Kafka Connect timestamps are milliseconds since epoch
+          return new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, null);
+        }
+        case "org.apache.kafka.connect.data.Date" -> {
+          return new ArrowType.Date(org.apache.arrow.vector.types.DateUnit.DAY);
+        }
+        case "org.apache.kafka.connect.data.Time" -> {
+          return new ArrowType.Time(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, 32);
+        }
+      }
+    }
+
+    // Default to type-based conversion
+    return toArrowType(kafkaSchema.type());
   }
 }
