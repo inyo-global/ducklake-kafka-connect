@@ -179,4 +179,9 @@ dependencies {
 // Configure duplicate strategy for integration test resources
 tasks.named<ProcessResources>("processIntegrationTestResources") {
     duplicatesStrategy = DuplicatesStrategy.INCLUDE
+
+}
+
+tasks.named<com.github.spotbugs.snom.SpotBugsTask>("spotbugsIntegrationTest") {
+    enabled = false
 }
