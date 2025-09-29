@@ -81,8 +81,8 @@ public class EmbeddedKafkaConnect {
     config.put("value.converter.schemas.enable", "false");
 
     // Consumer group configuration to avoid coordination issues
-    String uniqueGroupId = "embedded-connect-" + System.currentTimeMillis() + "-" +
-        Thread.currentThread().getId();
+    String uniqueGroupId =
+        "embedded-connect-" + System.currentTimeMillis() + "-" + Thread.currentThread().getId();
     config.put("consumer.group.id", uniqueGroupId);
 
     // Consumer timeout configurations to handle rebalancing better
@@ -172,7 +172,8 @@ public class EmbeddedKafkaConnect {
       offsetBackingStore.configure(config);
       offsetBackingStore.start();
 
-      System.out.println("✅ Using FileOffsetBackingStore with unique file: " + tempOffsetFile.getName());
+      System.out.println(
+          "✅ Using FileOffsetBackingStore with unique file: " + tempOffsetFile.getName());
 
       // Create worker with proper parameters
       Worker worker =
@@ -186,7 +187,8 @@ public class EmbeddedKafkaConnect {
 
       // Create herder directly without Connect wrapper
       herder =
-          new StandaloneHerder(worker, "kafka-cluster-id", new AllConnectorClientConfigOverridePolicy());
+          new StandaloneHerder(
+              worker, "kafka-cluster-id", new AllConnectorClientConfigOverridePolicy());
 
       // Start herder directly - no need for Connect wrapper
       herder.start();
@@ -198,7 +200,6 @@ public class EmbeddedKafkaConnect {
 
     } catch (Exception e) {
       System.err.println("❌ Failed to start embedded Kafka Connect: " + e.getMessage());
-      e.printStackTrace();
       throw new RuntimeException("Failed to start embedded Kafka Connect", e);
     }
   }
@@ -243,7 +244,6 @@ public class EmbeddedKafkaConnect {
 
     } catch (Exception e) {
       System.err.println("❌ Error during Kafka Connect shutdown: " + e.getMessage());
-      e.printStackTrace();
     }
   }
 

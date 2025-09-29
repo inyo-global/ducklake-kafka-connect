@@ -34,11 +34,11 @@ import org.apache.arrow.vector.Float4Vector;
 import org.apache.arrow.vector.Float8Vector;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.SmallIntVector;
+import org.apache.arrow.vector.TimeStampMilliVector;
 import org.apache.arrow.vector.TinyIntVector;
 import org.apache.arrow.vector.VarBinaryVector;
 import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
-import org.apache.arrow.vector.TimeStampMilliVector;
 import org.apache.arrow.vector.complex.ListVector;
 import org.apache.arrow.vector.complex.MapVector;
 import org.apache.arrow.vector.complex.StructVector;
@@ -318,7 +318,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
     }
 
     // Handle timestamp logical types
-    if (kafkaSchema.name() != null && kafkaSchema.name().equals("org.apache.kafka.connect.data.Timestamp")) {
+    if (kafkaSchema.name() != null
+        && kafkaSchema.name().equals("org.apache.kafka.connect.data.Timestamp")) {
       if (vector instanceof TimeStampMilliVector timestampVector) {
         if (value instanceof Long longValue) {
           // Value is already in epoch millis
@@ -331,8 +332,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
             timestampVector.set(index, epochMillis);
             return;
           } catch (Exception e) {
-            LOG.log(System.Logger.Level.WARNING,
-                "Failed to parse timestamp string: {0}", stringValue);
+            LOG.log(
+                System.Logger.Level.WARNING, "Failed to parse timestamp string: {0}", stringValue);
             vector.setNull(index);
             return;
           }
@@ -341,8 +342,10 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
           timestampVector.set(index, dateValue.getTime());
           return;
         } else {
-          LOG.log(System.Logger.Level.WARNING,
-              "Unsupported value type for timestamp: {0}", value.getClass());
+          LOG.log(
+              System.Logger.Level.WARNING,
+              "Unsupported value type for timestamp: {0}",
+              value.getClass());
           vector.setNull(index);
           return;
         }
@@ -372,25 +375,33 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       case BOOLEAN -> ((BitVector) vector).set(index, (Boolean) value ? 1 : 0);
       case STRING -> {
         // Handle case where unified schema created a timestamp vector but Kafka schema is string
-        if (vector instanceof TimeStampMilliVector && value instanceof String stringValue && TimestampUtils.isTimestamp(stringValue)) {
+        if (vector instanceof TimeStampMilliVector
+            && value instanceof String stringValue
+            && TimestampUtils.isTimestamp(stringValue)) {
           try {
             long epochMillis = TimestampUtils.parseTimestampToEpochMillis(stringValue);
             ((TimeStampMilliVector) vector).set(index, epochMillis);
           } catch (Exception e) {
-            LOG.log(System.Logger.Level.WARNING,
-                "Failed to parse timestamp string in STRING case: {0}", stringValue);
+            LOG.log(
+                System.Logger.Level.WARNING,
+                "Failed to parse timestamp string in STRING case: {0}",
+                stringValue);
             vector.setNull(index);
           }
         } else if (vector instanceof TimeStampMilliVector) {
           // Vector is timestamp but value is not a valid timestamp string, set to null
-          LOG.log(System.Logger.Level.WARNING,
-              "Cannot set non-timestamp value to timestamp vector: {0}", value);
+          LOG.log(
+              System.Logger.Level.WARNING,
+              "Cannot set non-timestamp value to timestamp vector: {0}",
+              value);
           vector.setNull(index);
         } else if (vector instanceof VarCharVector) {
           ((VarCharVector) vector).set(index, value.toString().getBytes(StandardCharsets.UTF_8));
         } else {
-          LOG.log(System.Logger.Level.WARNING,
-              "Unexpected vector type for STRING: {0}", vector.getClass());
+          LOG.log(
+              System.Logger.Level.WARNING,
+              "Unexpected vector type for STRING: {0}",
+              vector.getClass());
           vector.setNull(index);
         }
       }
@@ -548,15 +559,19 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       }
 
       // Handle timestamp conversion for string values
-      if (f.schema().name() != null && f.schema().name().equals("org.apache.kafka.connect.data.Timestamp")) {
+      if (f.schema().name() != null
+          && f.schema().name().equals("org.apache.kafka.connect.data.Timestamp")) {
         if (raw instanceof String stringValue && TimestampUtils.isTimestamp(stringValue)) {
           try {
             long epochMillis = TimestampUtils.parseTimestampToEpochMillis(stringValue);
             struct.put(f.name(), new java.util.Date(epochMillis));
             continue; // Skip the switch statement
           } catch (Exception e) {
-            LOG.log(System.Logger.Level.WARNING,
-                "Failed to convert timestamp string for field {0}: {1}", f.name(), stringValue);
+            LOG.log(
+                System.Logger.Level.WARNING,
+                "Failed to convert timestamp string for field {0}: {1}",
+                f.name(),
+                stringValue);
             struct.put(f.name(), null);
             continue; // Skip the switch statement
           }

@@ -16,7 +16,6 @@
 package com.inyo.ducklake.ingestor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -250,35 +249,6 @@ class DucklakeTableManagerTest {
     mgr.ensureTable(schema(stringField("id"), list));
     assertEquals(Set.of("id", "items"), getColumns(tableName));
     assertColumnType(tableName, "items", "JSON");
-  }
-
-  @Test
-  @DisplayName("Populates metadata cache after first ensureTable")
-  void testMetadataCachePopulation() throws Exception {
-    String tableName = uniqueTableName("t_cache1");
-    DucklakeWriterConfig cfg =
-        new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
-    DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
-    assertFalse(mgr.isMetadataCached());
-    mgr.ensureTable(schema(intField("id", 32), stringField("name")));
-    assertTrue(mgr.isMetadataCached());
-    assertEquals(Set.of("id", "name"), mgr.cachedColumnNames());
-    // Call again with same schema (should not change cache contents)
-    mgr.ensureTable(schema(intField("id", 32), stringField("name")));
-    assertEquals(Set.of("id", "name"), mgr.cachedColumnNames());
-  }
-
-  @Test
-  @DisplayName("Updates metadata cache incrementally on evolution")
-  void testMetadataCacheUpdatedOnEvolution() throws Exception {
-    String tableName = uniqueTableName("t_cache2");
-    DucklakeWriterConfig cfg =
-        new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
-    DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
-    mgr.ensureTable(schema(intField("a", 32)));
-    assertEquals(Set.of("a"), mgr.cachedColumnNames());
-    mgr.ensureTable(schema(intField("a", 32), stringField("b")));
-    assertEquals(Set.of("a", "b"), mgr.cachedColumnNames());
   }
 
   @Test

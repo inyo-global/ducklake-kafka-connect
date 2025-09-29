@@ -231,7 +231,8 @@ public class ArrowSchemaMerge {
           .filter(t -> t instanceof ArrowType.Timestamp)
           .map(t -> (ArrowType.Timestamp) t)
           .findFirst()
-          .orElse(new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, null));
+          .orElse(
+              new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, null));
     }
 
     // If there is no timestamp, but there is time, promote to time
@@ -293,8 +294,7 @@ public class ArrowSchemaMerge {
 
   private static boolean areAllStringLike(Set<ArrowType> types) {
     return types.stream()
-        .allMatch(t -> t instanceof ArrowType.Utf8
-                    || t instanceof ArrowType.LargeUtf8);
+        .allMatch(t -> t instanceof ArrowType.Utf8 || t instanceof ArrowType.LargeUtf8);
   }
 
   private static boolean areAllBinaryLike(Set<ArrowType> types) {
@@ -315,11 +315,13 @@ public class ArrowSchemaMerge {
   }
 
   private static boolean areAllTimestampLike(Set<ArrowType> types) {
-    return types.stream().allMatch(t ->
-        t instanceof ArrowType.Timestamp ||
-        t instanceof ArrowType.Time ||
-        t instanceof ArrowType.Date ||
-        t instanceof ArrowType.Utf8); // Allow string as compatible with timestamp
+    return types.stream()
+        .allMatch(
+            t ->
+                t instanceof ArrowType.Timestamp
+                    || t instanceof ArrowType.Time
+                    || t instanceof ArrowType.Date
+                    || t instanceof ArrowType.Utf8); // Allow string as compatible with timestamp
   }
 
   /**

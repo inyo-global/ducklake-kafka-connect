@@ -71,8 +71,7 @@ public class KafkaSchemaToArrow {
         arrowValueField =
             new org.apache.arrow.vector.types.pojo.Field(
                 "value",
-                new FieldType(
-                    valueFieldSchema.isOptional(), toArrowType(valueFieldSchema), null),
+                new FieldType(valueFieldSchema.isOptional(), toArrowType(valueFieldSchema), null),
                 null);
       }
       var entriesStruct =
@@ -104,7 +103,8 @@ public class KafkaSchemaToArrow {
   }
 
   /**
-   * Convert Kafka Connect schema types to Arrow types, with special handling for logical types like timestamps
+   * Convert Kafka Connect schema types to Arrow types, with special handling for logical types like
+   * timestamps
    */
   private static ArrowType toArrowType(Schema kafkaSchema) {
     // Handle logical types first

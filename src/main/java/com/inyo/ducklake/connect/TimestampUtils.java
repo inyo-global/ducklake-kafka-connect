@@ -21,83 +21,78 @@ import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.regex.Pattern;
 
-/**
- * Utility class for timestamp detection and conversion
- */
+/** Utility class for timestamp detection and conversion */
 public final class TimestampUtils {
 
-    private static final System.Logger LOG = System.getLogger(TimestampUtils.class.getName());
+  private static final System.Logger LOG = System.getLogger(TimestampUtils.class.getName());
 
-    private static final Pattern ISO8601_PATTERN = Pattern.compile(
-            "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:?\\d{2})?$"
-    );
+  private static final Pattern ISO8601_PATTERN =
+      Pattern.compile(
+          "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?(?:Z|[+-]\\d{2}:?\\d{2})?$");
 
-    private static final Pattern SIMPLE_TIMESTAMP_PATTERN = Pattern.compile(
-            "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?$"
-    );
+  private static final Pattern SIMPLE_TIMESTAMP_PATTERN =
+      Pattern.compile("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d{1,9})?$");
 
-    private TimestampUtils() {
-        // Utility class
+  private TimestampUtils() {
+    // Utility class
+  }
+
+  /** Checks if a string represents a valid timestamp */
+  public static boolean isTimestamp(String value) {
+    if (value == null || value.trim().isEmpty()) {
+      return false;
     }
 
-    /**
-     * Checks if a string represents a valid timestamp
-     */
-    public static boolean isTimestamp(String value) {
-        if (value == null || value.trim().isEmpty()) {
-            return false;
-        }
+    String trimmed = value.trim();
 
-        String trimmed = value.trim();
-
-        if (!ISO8601_PATTERN.matcher(trimmed).matches() &&
-            !SIMPLE_TIMESTAMP_PATTERN.matcher(trimmed).matches()) {
-            return false;
-        }
-
-        try {
-            parseTimestampToEpochMillis(trimmed);
-            return true;
-        } catch (Exception e) {
-            return false;
-        }
+    if (!ISO8601_PATTERN.matcher(trimmed).matches()
+        && !SIMPLE_TIMESTAMP_PATTERN.matcher(trimmed).matches()) {
+      return false;
     }
 
-    /**
-     * Converts a timestamp string to epoch millis
-     */
-    public static long parseTimestampToEpochMillis(String value) {
-        if (value == null || value.trim().isEmpty()) {
-            throw new IllegalArgumentException("Timestamp value cannot be null or empty");
-        }
-
-        String trimmed = value.trim();
-
-        try {
-            if (trimmed.endsWith("Z")) {
-                return Instant.parse(trimmed).toEpochMilli();
-            } else if (trimmed.matches(".*[+-]\\d{2}:?\\d{2}$")) {
-                // Normalize timezone format - add colon if missing
-                String normalized = trimmed;
-                if (trimmed.matches(".*[+-]\\d{4}$")) {
-                    // Format like "+0300" -> "+03:00"
-                    int lastIndex = trimmed.length();
-                    normalized = trimmed.substring(0, lastIndex - 2) + ":" + trimmed.substring(lastIndex - 2);
-                }
-                return OffsetDateTime.parse(normalized).toInstant().toEpochMilli();
-            } else {
-                if (trimmed.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?$")) {
-                    LocalDateTime ldt = LocalDateTime.parse(trimmed);
-                    return ldt.atOffset(java.time.ZoneOffset.UTC).toInstant().toEpochMilli();
-                } else {
-                    throw new DateTimeParseException("Invalid timestamp format", trimmed, 0);
-                }
-            }
-        } catch (DateTimeParseException e) {
-            LOG.log(System.Logger.Level.WARNING,
-                    "Failed to parse timestamp: {0}, error: {1}",
-                    trimmed, e.getMessage());
-            throw new IllegalArgumentException("Invalid timestamp format: " + trimmed, e);
-        }
+    try {
+      parseTimestampToEpochMillis(trimmed);
+      return true;
+    } catch (Exception e) {
+      return false;
     }
+  }
+
+  /** Converts a timestamp string to epoch millis */
+  public static long parseTimestampToEpochMillis(String value) {
+    if (value == null || value.trim().isEmpty()) {
+      throw new IllegalArgumentException("Timestamp value cannot be null or empty");
+    }
+
+    String trimmed = value.trim();
+
+    try {
+      if (trimmed.endsWith("Z")) {
+        return Instant.parse(trimmed).toEpochMilli();
+      } else if (trimmed.matches(".*[+-]\\d{2}:?\\d{2}$")) {
+        // Normalize timezone format - add colon if missing
+        String normalized = trimmed;
+        if (trimmed.matches(".*[+-]\\d{4}$")) {
+          // Format like "+0300" -> "+03:00"
+          int lastIndex = trimmed.length();
+          normalized = trimmed.substring(0, lastIndex - 2) + ":" + trimmed.substring(lastIndex - 2);
+        }
+        return OffsetDateTime.parse(normalized).toInstant().toEpochMilli();
+      } else {
+        if (trimmed.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?$")) {
+          LocalDateTime ldt = LocalDateTime.parse(trimmed);
+          return ldt.atOffset(java.time.ZoneOffset.UTC).toInstant().toEpochMilli();
+        } else {
+          throw new DateTimeParseException("Invalid timestamp format", trimmed, 0);
+        }
+      }
+    } catch (DateTimeParseException e) {
+      LOG.log(
+          System.Logger.Level.WARNING,
+          "Failed to parse timestamp: {0}, error: {1}",
+          trimmed,
+          e.getMessage());
+      throw new IllegalArgumentException("Invalid timestamp format: " + trimmed, e);
+    }
+  }
 }
