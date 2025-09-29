@@ -24,11 +24,9 @@ import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.apache.arrow.vector.types.pojo.ArrowType;
@@ -43,10 +41,10 @@ import org.duckdb.DuckDBConnection;
 public final class DucklakeTableManager {
 
     private static final System.Logger LOG = System.getLogger(DucklakeTableManager.class.getName());
+    private static final Object LOCK = new Object();
 
     private final DuckDBConnection connection;
     private final DucklakeWriterConfig config;
-    private Map<String, ColumnMeta> cachedMeta; // lowercase column name -> meta
 
     public DucklakeTableManager(DuckDBConnection connection, DucklakeWriterConfig config) {
         this.config = config;
@@ -72,18 +70,25 @@ public final class DucklakeTableManager {
     /**
      * Ensures that the table exists and reflects (at least) the columns of the provided Arrow schema.
      * Creates it if allowed; evolves (ADD COLUMN) new columns; validates existing column types.
+     *
+     * @param arrowSchema the Arrow schema to ensure
+     * @return true if the table existed before this operation, false if it was created
      */
-    public void ensureTable(Schema arrowSchema) throws SQLException {
-        String table = config.destinationTable();
-        if (!tableExists(table)) {
-            if (!config.autoCreateTable()) {
-                throw new IllegalStateException(
-                        "Table does not exist and auto-create is disabled: " + table);
+    public boolean ensureTable(Schema arrowSchema) throws SQLException {
+        synchronized (LOCK) {
+            String table = config.destinationTable();
+            boolean tableExisted = tableExists(table);
+            if (!tableExisted) {
+                if (!config.autoCreateTable()) {
+                    throw new IllegalStateException(
+                            "Table does not exist and auto-create is disabled: " + table);
+                }
+                createTable(arrowSchema);
+                LOG.log(System.Logger.Level.INFO, "Table created: {0}", table);
+            } else {
+                evolveTableSchema(arrowSchema);
             }
-            createTable(arrowSchema);
-            LOG.log(System.Logger.Level.INFO, "Table created: {0}", table);
-        } else {
-            evolveTableSchema(arrowSchema);
+            return tableExisted;
         }
     }
 
@@ -151,30 +156,24 @@ public final class DucklakeTableManager {
                 st.execute(alterDdl);
             }
         }
-
-        Map<String, ColumnMeta> map = new HashMap<>();
-        for (Field f : arrowSchema.getFields()) {
-            map.put(f.getName().toLowerCase(Locale.ROOT), new ColumnMeta(toDuckDBType(f.getType())));
-        }
-        cachedMeta = map;
     }
 
     @SuppressFBWarnings(
             value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
             justification = "DDL evolve validated: identifiers quoted via SqlIdentifierUtil.quote.")
     private void evolveTableSchema(Schema arrowSchema) throws SQLException {
-        Map<String, ColumnMeta> existing = loadExistingTableMeta();
+        Map<String, String> existing = loadExistingTableMeta();
         List<Field> fields = arrowSchema.getFields();
         List<Field> newColumns = new ArrayList<>();
         for (Field field : fields) {
             String colNameLower = field.getName().toLowerCase(Locale.ROOT);
-            ColumnMeta meta = existing.get(colNameLower);
+            String meta = existing.get(colNameLower);
             if (meta == null) {
                 newColumns.add(field);
             } else {
                 String expectedDuck = toDuckDBType(field.getType());
-                if (!meta.type.equalsIgnoreCase(expectedDuck)) {
-                    TypeEvolutionDecision decision = evaluateTypeEvolution(meta.type, expectedDuck);
+                if (!meta.equalsIgnoreCase(expectedDuck)) {
+                    TypeEvolutionDecision decision = evaluateTypeEvolution(meta, expectedDuck);
                     switch (decision) {
                         case COMPATIBLE_KEEP -> {
                         }
@@ -183,7 +182,7 @@ public final class DucklakeTableManager {
                                 "Incompatible type for column "
                                         + field.getName()
                                         + ": existing="
-                                        + meta.type
+                                        + meta
                                         + ", expected="
                                         + expectedDuck);
                     }
@@ -203,9 +202,6 @@ public final class DucklakeTableManager {
                 LOG.log(System.Logger.Level.INFO, "Adding new column: {0}", ddl);
                 try (Statement st = connection.createStatement()) {
                     st.execute(ddl);
-                }
-                if (cachedMeta != null) {
-                    cachedMeta.put(nf.getName().toLowerCase(Locale.ROOT), new ColumnMeta(newType));
                 }
             }
         }
@@ -251,44 +247,21 @@ public final class DucklakeTableManager {
         try (Statement st = connection.createStatement()) {
             st.execute(ddl);
         }
-        if (cachedMeta != null) {
-            cachedMeta.put(columnName.toLowerCase(Locale.ROOT), new ColumnMeta(newType));
-        }
     }
 
-    private Map<String, ColumnMeta> loadExistingTableMeta() throws SQLException {
-        if (cachedMeta != null) {
-            return cachedMeta;
-        }
-        Map<String, ColumnMeta> map = new HashMap<>();
+    private Map<String, String> loadExistingTableMeta() throws SQLException {
+        Map<String, String> map = new HashMap<>();
         final String sql = String.format("PRAGMA table_info(%s)", qualifiedTableRef());
         try (Statement st = connection.createStatement()) {
             try (ResultSet rs = st.executeQuery(sql)) {
                 while (rs.next()) {
                     String name = rs.getString("name");
                     String type = rs.getString("type");
-                    map.put(name.toLowerCase(Locale.ROOT), new ColumnMeta(type));
+                    map.put(name.toLowerCase(Locale.ROOT), type);
                 }
             }
         }
-        cachedMeta = map;
-        return cachedMeta;
-    }
-
-    boolean isMetadataCached() {
-        return cachedMeta != null;
-    }
-
-    Set<String> cachedColumnNames() {
-        return cachedMeta == null ? Set.of() : new HashSet<>(cachedMeta.keySet());
-    }
-
-    private static final class ColumnMeta {
-        private final String type;
-
-        private ColumnMeta(String type) {
-            this.type = type;
-        }
+        return map;
     }
 
     public String toDuckDBType(ArrowType type) {

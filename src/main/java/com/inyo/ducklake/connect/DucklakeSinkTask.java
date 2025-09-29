@@ -106,7 +106,7 @@ public class DucklakeSinkTask extends SinkTask {
           writer.write(vectorSchemaRoot);
 
           LOG.log(
-              System.Logger.Level.INFO,
+              System.Logger.Level.DEBUG,
               "Processed {0} records for partition {1}",
               vectorSchemaRoot.getRowCount(),
               partition);

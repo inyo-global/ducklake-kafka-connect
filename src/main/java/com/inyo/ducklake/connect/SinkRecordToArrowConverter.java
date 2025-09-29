@@ -165,7 +165,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       vectorSchemaRoot.setRowCount(records.size());
 
       LOG.log(
-          System.Logger.Level.INFO,
+          System.Logger.Level.DEBUG,
           "Converted {0} records to VectorSchemaRoot with unified schema: {1}",
           records.size(),
           unifiedSchema);
@@ -198,7 +198,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
           result.put(partition, vectorSchemaRoot);
 
           LOG.log(
-              System.Logger.Level.INFO,
+              System.Logger.Level.DEBUG,
               "Converted partition {0} with {1} records",
               partition,
               partitionRecords.size());

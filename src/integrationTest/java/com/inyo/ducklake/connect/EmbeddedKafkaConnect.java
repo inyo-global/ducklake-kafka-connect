@@ -34,6 +34,7 @@ import org.apache.kafka.connect.runtime.rest.entities.ConnectorStateInfo;
 import org.apache.kafka.connect.runtime.standalone.StandaloneConfig;
 import org.apache.kafka.connect.runtime.standalone.StandaloneHerder;
 import org.apache.kafka.connect.storage.FileOffsetBackingStore;
+import org.apache.kafka.connect.storage.OffsetBackingStore;
 import org.apache.kafka.connect.util.FutureCallback;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 
@@ -41,6 +42,7 @@ public class EmbeddedKafkaConnect {
 
   private Connect<StandaloneHerder> connect;
   private StandaloneHerder herder;
+  private OffsetBackingStore offsetBackingStore;
   private final Map<String, String> baseConfig;
   private final Duration startupTimeout;
   private File tempOffsetFile;
@@ -57,10 +59,12 @@ public class EmbeddedKafkaConnect {
   private Map<String, String> createBaseConfig(String bootstrapServers) {
     Map<String, String> config = new HashMap<>();
 
-    // Create temporary offset file
+    // Create unique temporary offset file per instance to avoid conflicts
     try {
-      tempOffsetFile = Files.createTempFile("connect-offsets", ".tmp").toFile();
+      String uniqueId = System.currentTimeMillis() + "-" + Thread.currentThread().getId();
+      tempOffsetFile = Files.createTempFile("connect-offsets-" + uniqueId, ".tmp").toFile();
       tempOffsetFile.deleteOnExit();
+      System.out.println("📁 Created unique offset file: " + tempOffsetFile.getAbsolutePath());
     } catch (IOException e) {
       throw new RuntimeException("Failed to create temporary offset file", e);
     }
@@ -75,6 +79,23 @@ public class EmbeddedKafkaConnect {
         WorkerConfig.VALUE_CONVERTER_CLASS_CONFIG, "org.apache.kafka.connect.json.JsonConverter");
     // Only disable schemas for JSON converter (value), not needed for StringConverter
     config.put("value.converter.schemas.enable", "false");
+
+    // Consumer group configuration to avoid coordination issues
+    String uniqueGroupId = "embedded-connect-" + System.currentTimeMillis() + "-" +
+        Thread.currentThread().getId();
+    config.put("consumer.group.id", uniqueGroupId);
+
+    // Consumer timeout configurations to handle rebalancing better
+    config.put("consumer.session.timeout.ms", "30000");
+    config.put("consumer.heartbeat.interval.ms", "3000");
+    config.put("consumer.max.poll.interval.ms", "300000");
+    config.put("consumer.request.timeout.ms", "40000");
+    config.put("consumer.retry.backoff.ms", "1000");
+
+    // Additional consumer configurations for stability
+    config.put("consumer.auto.offset.reset", "earliest");
+    config.put("consumer.enable.auto.commit", "true");
+    config.put("consumer.auto.commit.interval.ms", "5000");
 
     // Standalone mode configuration
     config.put(
@@ -142,17 +163,21 @@ public class EmbeddedKafkaConnect {
       Plugins plugins = new Plugins(baseConfig);
       plugins.compareAndSwapWithDelegatingLoader();
 
-      // Create offset backing store with proper converter
+      // Create offset backing store with proper converter and unique file
       var converter = new JsonConverter();
       converter.configure(config.originalsWithPrefix(""), false);
-      FileOffsetBackingStore offsetBackingStore = new FileOffsetBackingStore(converter);
+
+      // Use FileOffsetBackingStore with unique file per instance to avoid conflicts
+      offsetBackingStore = new FileOffsetBackingStore(converter);
       offsetBackingStore.configure(config);
       offsetBackingStore.start();
+
+      System.out.println("✅ Using FileOffsetBackingStore with unique file: " + tempOffsetFile.getName());
 
       // Create worker with proper parameters
       Worker worker =
           new Worker(
-              "embedded-connect",
+              "duck-embedded-connect",
               org.apache.kafka.common.utils.Time.SYSTEM,
               plugins,
               config,
@@ -161,7 +186,7 @@ public class EmbeddedKafkaConnect {
 
       // Create herder directly without Connect wrapper
       herder =
-          new StandaloneHerder(worker, "cluster-id", new AllConnectorClientConfigOverridePolicy());
+          new StandaloneHerder(worker, "kafka-cluster-id", new AllConnectorClientConfigOverridePolicy());
 
       // Start herder directly - no need for Connect wrapper
       herder.start();
@@ -173,19 +198,52 @@ public class EmbeddedKafkaConnect {
 
     } catch (Exception e) {
       System.err.println("❌ Failed to start embedded Kafka Connect: " + e.getMessage());
+      e.printStackTrace();
       throw new RuntimeException("Failed to start embedded Kafka Connect", e);
     }
   }
 
   public void stop() {
-    if (herder != null) {
-      herder.stop();
-    }
-    if (connect != null) {
-      connect.stop();
-    }
-    if (tempOffsetFile != null && tempOffsetFile.exists()) {
-      var ignored = tempOffsetFile.delete();
+    System.out.println("🛑 Stopping Embedded Kafka Connect...");
+
+    try {
+      if (herder != null) {
+        System.out.println("Stopping herder...");
+        herder.stop();
+        herder = null;
+      }
+
+      if (offsetBackingStore != null) {
+        System.out.println("Stopping offset backing store...");
+        try {
+          offsetBackingStore.stop();
+        } catch (Exception e) {
+          System.err.println("Error stopping offset backing store: " + e.getMessage());
+        }
+        offsetBackingStore = null;
+      }
+
+      if (connect != null) {
+        System.out.println("Stopping connect...");
+        connect.stop();
+        connect = null;
+      }
+
+      // Clean up offset file
+      if (tempOffsetFile != null && tempOffsetFile.exists()) {
+        System.out.println("Deleting offset file: " + tempOffsetFile.getAbsolutePath());
+        boolean deleted = tempOffsetFile.delete();
+        if (!deleted) {
+          System.err.println("Failed to delete offset file: " + tempOffsetFile.getAbsolutePath());
+        }
+        tempOffsetFile = null;
+      }
+
+      System.out.println("✅ Embedded Kafka Connect stopped successfully");
+
+    } catch (Exception e) {
+      System.err.println("❌ Error during Kafka Connect shutdown: " + e.getMessage());
+      e.printStackTrace();
     }
   }
 
