@@ -42,7 +42,7 @@ public class DucklakeConnectionFactory {
     properties.setProperty("s3_use_ssl", config.getS3UseSsl());
     properties.setProperty("s3_endpoint", config.getS3Endpoint());
     properties.setProperty("s3_access_key_id", config.getS3AccessKeyId());
-    properties.setProperty("s3_secret_access_key", config.getS3SecretAccessKey());
+    properties.setProperty("s3secret_access_key", config.getS3SecretAccessKey());
     properties.setProperty("threads", "1");
     this.conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
     final String statement =

@@ -38,7 +38,7 @@ public class DucklakeSinkConfig extends AbstractConfig {
   static final String S3_USE_SSL = "s3.use_ssl";
   static final String S3_ENDPOINT = "s3.endpoint";
   static final String S3_ACCESS_KEY_ID = "s3.access_key_id";
-  static final String S3_SECRET_ACCESS_KEY = "s3._secret_access_key";
+  static final String S3_SECRET_ACCESS_KEY = "s3.secret_access_key";
 
   // Table-specific configuration property patterns
   static final String TABLE_ID_COLUMNS_PATTERN = "ducklake.table.%s.id-columns";
@@ -102,11 +102,7 @@ public class DucklakeSinkConfig extends AbstractConfig {
     return getString(DUCKLAKE_CATALOG_URI);
   }
 
-  public String getTables() {
-    return getString(TABLES_PROP);
-  }
-
-  public String getS3UrlStyle() {
+    public String getS3UrlStyle() {
     return getString(S3_URL_STYLE);
   }
 

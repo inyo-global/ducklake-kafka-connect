@@ -254,7 +254,7 @@ class EndToEndIntegrationTest {
     Integer minioPort = minio.getMappedPort(9000);
     connectorProps.put("s3.endpoint", String.format("%s:%d", minioHost, minioPort));
     connectorProps.put("s3.access_key_id", "minio");
-    connectorProps.put("s3._secret_access_key", "minio123");
+    connectorProps.put("s3.secret_access_key", "minio123");
 
     return connectorProps;
   }
@@ -283,7 +283,7 @@ class EndToEndIntegrationTest {
     Integer minioPort = minio.getMappedPort(9000);
     cfgMap.put("s3.endpoint", String.format("%s:%d", minioHost, minioPort));
     cfgMap.put("s3.access_key_id", "minio");
-    cfgMap.put("s3._secret_access_key", "minio123");
+    cfgMap.put("s3.secret_access_key", "minio123");
 
     var dlConfig = new DucklakeSinkConfig(DucklakeSinkConfig.CONFIG_DEF, cfgMap);
     return new DucklakeConnectionFactory(dlConfig);

@@ -58,14 +58,13 @@ See `DucklakeSinkConfig` for authoritative definitions.
 | Property                | Required | Description                                                          |
 |-------------------------|----------|----------------------------------------------------------------------|
 | `ducklake.catalog_uri`  | yes      | Catalog URI (e.g. `postgres:dbname=ducklake_catalog host=localhost`) |
-| `ducklake.tables`       | yes      | Comma-separated list of destination table names                      |
 | `topic2table.map`       | no       | Explicit topic→table mapping (`topicA:tbl_a,topicB:tbl_b`)           |
 | `ducklake.data_path`    | yes      | Base data path (s3://, gs://, file://) if applicable                 |
 | `s3.url_style`          | depends  | `vhost` or `path`                                                    |
 | `s3.use_ssl`            | depends  | `true` / `false`                                                     |
 | `s3.endpoint`           | no       | Custom S3-compatible endpoint                                        |
 | `s3.access_key_id`      | depends  | Access key id                                                        |
-| `s3._secret_access_key` | depends  | Access key secret (note the underscore naming)                       |
+| `s3.secret_access_key` | depends  | Access key secret (note the underscore naming)                       |
 
 ### Table-Specific Properties (replace `<table>`)
 - `ducklake.table.<table>.id-columns` : primary key columns (e.g. `id,tenant_id`)
@@ -104,7 +103,7 @@ If you run the connector against MinIO in tests, use an S3 path and set the S3 p
 - s3.use_ssl: false
 - s3.endpoint: http://minio:9000
 - s3.access_key_id: minio
-- s3._secret_access_key: minio123
+- s3.secret_access_key: minio123
 
 Note: The test creates the bucket `test-bucket` in MinIO before starting the connector (using the minio client). In local or CI setups, ensure the bucket exists or create it programmatically before the connector starts.
 
