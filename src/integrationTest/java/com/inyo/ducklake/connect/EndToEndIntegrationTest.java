@@ -17,18 +17,12 @@ package com.inyo.ducklake.connect;
 
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
-import java.sql.SQLException;
-import java.time.Duration;
-import java.util.Map;
-import java.util.Properties;
-import java.util.UUID;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.connect.runtime.rest.entities.ConnectorStateInfo;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.containers.Network;
@@ -37,6 +31,15 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
+
+import java.sql.SQLException;
+import java.time.Duration;
+import java.util.Map;
+import java.util.Properties;
+import java.util.UUID;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Testcontainers
 class EndToEndIntegrationTest {
@@ -158,7 +161,7 @@ class EndToEndIntegrationTest {
       if ("FAILED".equals(connectorState)) {
         throw new RuntimeException("Connector failed: " + status.connector().trace());
       }
-      Assertions.assertEquals(
+      assertEquals(
           "RUNNING",
           connectorState,
           "Connector should be in RUNNING state but was: " + connectorState);
@@ -179,7 +182,7 @@ class EndToEndIntegrationTest {
 
       boolean allTasksRunning =
           status.tasks().stream().allMatch(task -> "RUNNING".equals(task.state()));
-      Assertions.assertTrue(
+      assertTrue(
           allTasksRunning,
           "All connector tasks should be RUNNING. Current tasks states: "
               + status.tasks().stream().map(ConnectorStateInfo.AbstractState::state).toList());
@@ -199,13 +202,13 @@ class EndToEndIntegrationTest {
           var st = duckConn.createStatement();
           var rs = st.executeQuery("SELECT id, customer FROM lake.main." + tableName)) {
 
-        Assertions.assertTrue(rs.next(), "Expected at least one row in table " + tableName);
+        assertTrue(rs.next(), "Expected at least one row in table " + tableName);
 
         int id = rs.getInt("id");
         String customer = rs.getString("customer");
 
-        Assertions.assertEquals(1, id, "Expected id to be 1");
-        Assertions.assertEquals("alice", customer, "Expected customer to be 'alice'");
+        assertEquals(1, id, "Expected id to be 1");
+        assertEquals("alice", customer, "Expected customer to be 'alice'");
       }
     } catch (SQLException e) {
       // Check if this is a "table doesn't exist" error (expected during async creation)
