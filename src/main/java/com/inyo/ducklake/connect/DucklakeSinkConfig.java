@@ -102,7 +102,7 @@ public class DucklakeSinkConfig extends AbstractConfig {
     return getString(DUCKLAKE_CATALOG_URI);
   }
 
-    public String getS3UrlStyle() {
+  public String getS3UrlStyle() {
     return getString(S3_URL_STYLE);
   }
 
