@@ -15,8 +15,16 @@
  */
 package com.inyo.ducklake.connect;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
+import java.sql.SQLException;
+import java.time.Duration;
+import java.util.Map;
+import java.util.Properties;
+import java.util.UUID;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -31,15 +39,6 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
-
-import java.sql.SQLException;
-import java.time.Duration;
-import java.util.Map;
-import java.util.Properties;
-import java.util.UUID;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Testcontainers
 class EndToEndIntegrationTest {
