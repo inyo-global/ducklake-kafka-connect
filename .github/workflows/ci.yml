@@ -323,8 +323,8 @@ jobs:
             build/libs/*.jar
             build/distributions/*.tar
             build/distributions/*.zip
-          tag_name: v${{ github.run_number }}
-          name: Release v${{ github.run_number }}
+          tag_name: 0.0.v${{ github.run_number }}
+          name: Release 0.0.v${{ github.run_number }}
           draft: false
           prerelease: false
         env:
