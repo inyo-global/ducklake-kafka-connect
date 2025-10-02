@@ -31,7 +31,6 @@ public class DucklakeSinkConfig extends AbstractConfig {
 
   public static final ConfigDef CONFIG_DEF = newConfigDef();
 
-  static final String TABLES_PROP = "ducklake.tables";
   static final String DATA_PATH = "ducklake.data_path";
   static final String TOPICS_TABLES_MAP = "topic2table.map";
   static final String S3_URL_STYLE = "s3.url_style";
@@ -52,11 +51,6 @@ public class DucklakeSinkConfig extends AbstractConfig {
             ConfigDef.Type.STRING,
             ConfigDef.Importance.HIGH,
             "Ducklake catalog URI, e.g., postgres:dbname=ducklake_catalog host=localhost")
-        .define(
-            TABLES_PROP,
-            ConfigDef.Type.STRING,
-            ConfigDef.Importance.HIGH,
-            "Comma-delimited list of destination tables")
         .define(
             TOPICS_TABLES_MAP,
             ConfigDef.Type.STRING,

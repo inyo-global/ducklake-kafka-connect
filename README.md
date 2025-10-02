@@ -80,7 +80,6 @@ See `DucklakeSinkConfig` for authoritative definitions.
     "tasks.max": "1",
     "topics": "orders",
     "ducklake.catalog_uri": "postgres:dbname=ducklake_catalog host=localhost user=duck password=duck",
-    "ducklake.tables": "orders",
     "topic2table.map": "orders:orders",
     "ducklake.data_path": "file:///tmp/ducklake/",
     "ducklake.table.orders.id-columns": "id",

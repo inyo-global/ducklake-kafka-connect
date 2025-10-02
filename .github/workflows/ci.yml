@@ -7,7 +7,6 @@ on:
     branches: [ main, develop ]
   workflow_dispatch:
 
-# Permissões necessárias para criar check runs (test-reporter) e enviar SARIF (CodeQL/SpotBugs)
 permissions:
   contents: read
   checks: write
@@ -287,7 +286,7 @@ jobs:
     needs: [build, static-analysis, security-scan]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
     permissions:
-      contents: write  # Necessário para criar release
+      contents: write
 
     steps:
       - name: Checkout code

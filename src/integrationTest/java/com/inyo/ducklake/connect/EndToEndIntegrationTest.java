@@ -242,8 +242,6 @@ class EndToEndIntegrationTest {
         String.format(
             "postgres:dbname=ducklake_catalog host=%s port=%d user=duck password=duck",
             pgHost, pgPort));
-
-    connectorProps.put("ducklake.tables", tableName);
     connectorProps.put("topic2table.map", topicName + ":" + tableName);
     connectorProps.put("ducklake.data_path", "s3://test-bucket/");
     connectorProps.put("ducklake.table." + tableName + ".id-columns", "id");
@@ -274,7 +272,6 @@ class EndToEndIntegrationTest {
             pgHost, pgPort));
 
     // Required core properties for DucklakeSinkConfig
-    cfgMap.put("ducklake.tables", tableName);
     cfgMap.put("topic2table.map", topicName + ":" + tableName);
 
     cfgMap.put("ducklake.data_path", "s3://test-bucket/");
