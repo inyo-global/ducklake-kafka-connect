@@ -34,16 +34,30 @@ public final class DucklakeWriterFactory {
     }
   }
 
+  /**
+   * Creates a DucklakeWriter for the specified topic.
+   *
+   * <p>This method handles topic-to-table mapping by:
+   *
+   * <ul>
+   *   <li>Using explicit mappings from the configuration when available
+   *   <li>Falling back to using the topic name as the table name when no mapping is configured
+   * </ul>
+   *
+   * @param topic the Kafka topic name
+   * @return a configured DucklakeWriter instance
+   */
   public DucklakeWriter create(String topic) {
     final var topicsTables = config.getTopicToTableMap();
+    // Use explicit mapping if available, otherwise use topic name as table name
     final var table = topicsTables.getOrDefault(topic, topic);
 
     final var idCols = config.getTableIdColumns(table);
-    final var partitionCols = config.getTablePartitionByColumns(table);
+    final var partitionExprs = config.getTablePartitionByExpressions(table);
     final var autoCreate = config.getTableAutoCreate(table);
 
     DucklakeWriterConfig writerConfig =
-        new DucklakeWriterConfig(table, autoCreate, idCols, partitionCols);
+        new DucklakeWriterConfig(table, autoCreate, idCols, partitionExprs);
 
     return new DucklakeWriter(conn, writerConfig);
   }

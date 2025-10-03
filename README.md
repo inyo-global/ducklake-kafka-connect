@@ -6,8 +6,8 @@ Kafka Connect sink connector for ingesting data into DuckDB ("Ducklake"). It aut
 - Optional automatic table creation using Arrow -> DuckDB type mapping
 - Schema evolution (ADD COLUMN / widening upgrades for integer types and FLOAT→DOUBLE)
 - Complex types (STRUCT, LIST, MAP) serialized as JSON
-- Upsert semantics based on configured ID (primary key) columns (`ON CONFLICT DO UPDATE`); falls back to plain INSERT when no key
-- Logical partition metadata (future use)
+- Upsert semantics based on configured IDs (primary keys) using merge into
+- **Flexible partition expressions** supporting raw columns, temporal functions, and integer timestamp casting
 
 ## Current Limitations
 - JSON columns do not evolve to or from other data types (intentional safeguard).
@@ -68,10 +68,102 @@ See `DucklakeSinkConfig` for authoritative definitions.
 
 ### Table-Specific Properties (replace `<table>`)
 - `ducklake.table.<table>.id-columns` : primary key columns (e.g. `id,tenant_id`)
-- `ducklake.table.<table>.partition-by` : logical partition columns
+- `ducklake.table.<table>.partition-by` : partition expressions (see Partition Expressions section below)
 - `ducklake.table.<table>.auto-create` : `true` / `false`
 
+## Partition Expressions
+
+The connector supports flexible partition expressions that go beyond simple column names. You can use temporal functions, casting expressions, and complex SQL expressions in the `partition-by` configuration.
+
+### Basic Column Partitioning
+Partition by simple column values:
+```
+ducklake.table.users.partition-by=region,status
+ducklake.table.orders.partition-by=customer_type,order_status
+```
+
+### Temporal Function Partitioning
+Partition timestamp columns by year, month, or day:
+```
+ducklake.table.events.partition-by=year(created_at),month(created_at)
+ducklake.table.logs.partition-by=year(timestamp),month(timestamp),day(timestamp)
+```
+
+### Integer Timestamp Partitioning
+For integer timestamps (Unix epoch), use casting expressions to convert them to timestamps before applying temporal functions:
+
+#### Basic Integer Timestamp Casting
+Convert integer seconds to timestamp:
+```
+ducklake.table.events.partition-by=year(CAST(epoch_seconds AS TIMESTAMP))
+ducklake.table.user_activity.partition-by=year(CAST(created_epoch AS TIMESTAMP)),month(CAST(created_epoch AS TIMESTAMP))
+```
+
+#### Millisecond Epoch Timestamps
+Convert millisecond timestamps to seconds, then to timestamp:
+```
+ducklake.table.metrics.partition-by=year(CAST(event_time_millis / 1000 AS TIMESTAMP)),month(CAST(event_time_millis / 1000 AS TIMESTAMP))
+ducklake.table.analytics.partition-by=year(CAST(timestamp_ms / 1000 AS TIMESTAMP))
+```
+
+#### Using DuckDB's to_timestamp Function
+Alternative approach using DuckDB's built-in function:
+```
+ducklake.table.user_events.partition-by=year(to_timestamp(unix_time)),month(to_timestamp(unix_time))
+ducklake.table.activity_logs.partition-by=year(to_timestamp(event_epoch))
+```
+
+#### Complex Conditional Casting
+Handle different timestamp formats dynamically:
+```
+ducklake.table.mixed_events.partition-by=year(CASE WHEN timestamp_type = 'seconds' THEN CAST(event_time AS TIMESTAMP) ELSE CAST(event_time / 1000 AS TIMESTAMP) END),event_category
+```
+
+#### Epoch Timestamp with Offset
+Handle different epoch bases (e.g., epoch since 1900 vs 1970):
+```
+ducklake.table.legacy_data.partition-by=year(CAST(epoch_time + 2208988800 AS TIMESTAMP)),region
+```
+
+### Mixed Partitioning
+Combine temporal functions with regular columns:
+```
+ducklake.table.activity_logs.partition-by=year(CAST(event_time AS TIMESTAMP)),log_level,service_name
+ducklake.table.user_events.partition-by=year(created_at),month(created_at),user_segment,event_type
+```
+
+### Partition Expression Guidelines
+- **Comma-separated**: Multiple expressions separated by commas
+- **SQL expressions**: Any valid DuckDB SQL expression can be used
+- **Function support**: Use DuckDB functions like `year()`, `month()`, `day()`, `CAST()`, `to_timestamp()`
+- **Case sensitivity**: DuckDB is case-insensitive for function names
+- **Whitespace**: Extra whitespace around expressions is automatically trimmed
+
+### Example Schema Mapping
+For a Kafka message with integer timestamp:
+```json
+{
+  "id": 123,
+  "user_id": "user456",
+  "event_type": "login",
+  "created_epoch": 1696348800,
+  "properties": {"source": "mobile"}
+}
+```
+
+Use this partition configuration:
+```
+ducklake.table.user_events.partition-by=year(CAST(created_epoch AS TIMESTAMP)),month(CAST(created_epoch AS TIMESTAMP)),event_type
+```
+
+This will partition the table by:
+- Year extracted from the integer timestamp
+- Month extracted from the integer timestamp  
+- Event type as a string column
+
 ## Example Connector Config (Kafka Connect REST)
+
+### Basic Configuration
 ```json
 {
   "name": "ducklake-sink",
@@ -92,38 +184,67 @@ See `DucklakeSinkConfig` for authoritative definitions.
 }
 ```
 
-## Note about using MinIO in integration tests
-The integration tests use a local MinIO container as an S3-compatible backend so that Kafka Connect (running in a container), the connector, and the host can all access the same data path.
-
-If you run the connector against MinIO in tests, use an S3 path and set the S3 properties accordingly. Example (matches the integration test):
-
-- ducklake.data_path: s3://test-bucket/
-- s3.url_style: path
-- s3.use_ssl: false
-- s3.endpoint: http://minio:9000
-- s3.access_key_id: minio
-- s3.secret_access_key: minio123
-
-Note: The test creates the bucket `test-bucket` in MinIO before starting the connector (using the minio client). In local or CI setups, ensure the bucket exists or create it programmatically before the connector starts.
-
-## Schema Evolution Rules
-- New columns: `ALTER TABLE ADD COLUMN`
-- Allowed widening: integer ladder (TINYINT→SMALLINT→INTEGER→BIGINT) and FLOAT→DOUBLE
-- Incompatible: any change involving JSON type or narrowing precision
-
-## Internal Structure (Overview)
-- `DucklakeSinkConnector` / `DucklakeSinkTask`: Kafka Connect integration
-- `SinkRecordToArrowConverter`: batch conversion SinkRecord → Arrow
-- `DucklakeWriter` / `DucklakeTableManager`: upsert logic & schema management
-
-## Testing
-```bash
-./gradlew test
+### Advanced Configuration with Integer Timestamp Partitioning
+```json
+{
+  "name": "ducklake-events-sink",
+  "config": {
+    "connector.class": "com.inyo.ducklake.connect.DucklakeSinkConnector",
+    "tasks.max": "2",
+    "topics": "user_events,system_logs,metrics",
+    "ducklake.catalog_uri": "postgres:dbname=ducklake_catalog host=localhost user=duck password=duck",
+    "topic2table.map": "user_events:events,system_logs:logs,metrics:app_metrics",
+    "ducklake.data_path": "s3://my-datalake/",
+    "s3.url_style": "path",
+    "s3.use_ssl": "true",
+    "s3.endpoint": "s3.amazonaws.com",
+    "s3.access_key_id": "${env:AWS_ACCESS_KEY_ID}",
+    "s3.secret_access_key": "${env:AWS_SECRET_ACCESS_KEY}",
+    
+    "ducklake.table.events.id-columns": "event_id,user_id",
+    "ducklake.table.events.partition-by": "year(CAST(created_epoch AS TIMESTAMP)),month(CAST(created_epoch AS TIMESTAMP)),event_type",
+    "ducklake.table.events.auto-create": "true",
+    
+    "ducklake.table.logs.id-columns": "log_id",
+    "ducklake.table.logs.partition-by": "year(to_timestamp(timestamp_unix)),log_level,service_name",
+    "ducklake.table.logs.auto-create": "true",
+    
+    "ducklake.table.app_metrics.id-columns": "metric_id",
+    "ducklake.table.app_metrics.partition-by": "year(CAST(event_time_millis / 1000 AS TIMESTAMP)),metric_type",
+    "ducklake.table.app_metrics.auto-create": "true",
+    
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false"
+  }
+}
 ```
 
-## Contributing
-PRs and issues welcome. Style: Google Java Format + SpotBugs (build fails on violations).
-
-## License
-Apache License 2.0 (see `LICENSE.md`).
-
+### Multi-Table Configuration with Different Partition Strategies
+```json
+{
+  "name": "ducklake-multi-sink",
+  "config": {
+    "connector.class": "com.inyo.ducklake.connect.DucklakeSinkConnector",
+    "tasks.max": "3",
+    "topics": "orders,users,analytics",
+    "ducklake.catalog_uri": "postgres:dbname=ducklake_catalog host=localhost user=duck password=duck",
+    "ducklake.data_path": "s3://analytics-bucket/",
+    "s3.url_style": "path",
+    "s3.use_ssl": "true",
+    
+    "ducklake.table.orders.id-columns": "order_id",
+    "ducklake.table.orders.partition-by": "year(order_date),month(order_date),status",
+    "ducklake.table.orders.auto-create": "true",
+    
+    "ducklake.table.users.id-columns": "user_id",
+    "ducklake.table.users.partition-by": "region,user_type",
+    "ducklake.table.users.auto-create": "true",
+    
+    "ducklake.table.analytics.id-columns": "event_id",
+    "ducklake.table.analytics.partition-by": "year(CASE WHEN ts_format = 'ms' THEN CAST(timestamp_value / 1000 AS TIMESTAMP) ELSE CAST(timestamp_value AS TIMESTAMP) END),category",
+    "ducklake.table.analytics.auto-create": "true"
+  }
+}
+```

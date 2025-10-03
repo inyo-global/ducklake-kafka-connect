@@ -25,24 +25,25 @@ import java.util.Objects;
  * @param destinationTable the destination table name where data will be written
  * @param autoCreateTable whether the table should be automatically created if it doesn't exist
  * @param tableIdColumns array of column names that serve as ID/primary key columns for the table
- * @param partitionByColumns array of column names used for partitioning the table
+ * @param partitionByExpressions array of partition expressions (e.g., "year(created_at)",
+ *     "month(created_at)", "status")
  */
 public record DucklakeWriterConfig(
     String destinationTable,
     boolean autoCreateTable,
     String[] tableIdColumns,
-    String[] partitionByColumns) {
+    String[] partitionByExpressions) {
   /** Compact constructor that validates and clones arrays to ensure immutability. */
   public DucklakeWriterConfig(
       String destinationTable,
       boolean autoCreateTable,
       String[] tableIdColumns,
-      String[] partitionByColumns) {
+      String[] partitionByExpressions) {
     this.destinationTable = Objects.requireNonNull(destinationTable, "destinationTable");
     this.autoCreateTable = autoCreateTable;
     this.tableIdColumns = tableIdColumns != null ? tableIdColumns.clone() : new String[0];
-    this.partitionByColumns =
-        partitionByColumns != null ? partitionByColumns.clone() : new String[0];
+    this.partitionByExpressions =
+        partitionByExpressions != null ? partitionByExpressions.clone() : new String[0];
   }
 
   /**
@@ -56,13 +57,13 @@ public record DucklakeWriterConfig(
   }
 
   /**
-   * Gets the column names used for partitioning the table.
+   * Gets the partition expressions used for partitioning the table.
    *
-   * @return array of partition column names (cloned for immutability)
+   * @return array of partition expressions (cloned for immutability)
    */
   @Override
-  public String[] partitionByColumns() {
-    return partitionByColumns.clone();
+  public String[] partitionByExpressions() {
+    return partitionByExpressions.clone();
   }
 
   @Override
@@ -73,14 +74,14 @@ public record DucklakeWriterConfig(
     return autoCreateTable == that.autoCreateTable
         && destinationTable.equals(that.destinationTable)
         && Arrays.equals(tableIdColumns, that.tableIdColumns)
-        && Arrays.equals(partitionByColumns, that.partitionByColumns);
+        && Arrays.equals(partitionByExpressions, that.partitionByExpressions);
   }
 
   @Override
   public int hashCode() {
     int result = Objects.hash(destinationTable, autoCreateTable);
     result = 31 * result + Arrays.hashCode(tableIdColumns);
-    result = 31 * result + Arrays.hashCode(partitionByColumns);
+    result = 31 * result + Arrays.hashCode(partitionByExpressions);
     return result;
   }
 }
