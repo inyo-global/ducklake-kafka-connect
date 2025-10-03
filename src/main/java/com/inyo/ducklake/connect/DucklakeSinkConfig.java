@@ -151,12 +151,14 @@ public class DucklakeSinkConfig extends AbstractConfig {
   }
 
   /**
-   * Gets the partition-by columns for a specific table.
+   * Gets the partition expressions for a specific table. These can be column names (e.g., "status",
+   * "region") or function expressions (e.g., "year(created_at)", "month(created_at)",
+   * "day(created_at)").
    *
    * @param tableName the name of the table
-   * @return array of partition column names, empty array if not configured
+   * @return array of partition expressions, empty array if not configured
    */
-  public String[] getTablePartitionByColumns(String tableName) {
+  public String[] getTablePartitionByExpressions(String tableName) {
     String propertyKey = String.format(TABLE_PARTITION_BY_PATTERN, tableName);
     Object raw = originals().get(propertyKey);
     if (raw == null) {

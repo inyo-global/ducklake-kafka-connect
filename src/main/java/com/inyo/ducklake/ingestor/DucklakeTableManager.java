@@ -21,7 +21,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -138,28 +137,16 @@ public final class DucklakeTableManager {
     }
 
     // Set partitioning after table creation using ALTER TABLE SET PARTITIONED BY
-    if (config.partitionByColumns().length > 0) {
-      String partitionCols =
-          Arrays.stream(config.partitionByColumns())
-              .map(SqlIdentifierUtil::quote)
-              .collect(Collectors.joining(", "));
+    if (config.partitionByExpressions().length > 0) {
+      String partitionExprs = String.join(", ", config.partitionByExpressions());
       String alterDdl =
-          "ALTER TABLE "
-              + qualifiedTableRef()
-              + " SET PARTITIONED BY ("
-              + "year("
-              + partitionCols
-              + "), "
-              + "month("
-              + partitionCols
-              + "), "
-              + "day("
-              + partitionCols
-              + ")"
-              + ")";
+          "ALTER TABLE " + qualifiedTableRef() + " SET PARTITIONED BY (" + partitionExprs + ")";
       LOG.log(System.Logger.Level.INFO, "Setting table partitioning: {0}", alterDdl);
       try (Statement st = connection.createStatement()) {
         st.execute(alterDdl);
+      } catch (SQLException e) {
+        LOG.log(System.Logger.Level.ERROR, "Failed to set table partitioning", e);
+        throw e;
       }
     }
   }

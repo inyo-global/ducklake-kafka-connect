@@ -19,6 +19,7 @@ import static com.inyo.ducklake.connect.DucklakeSinkConfig.TOPICS_TABLES_MAP;
 
 import java.util.HashMap;
 import java.util.Map;
+import javax.annotation.Nonnull;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigException;
 
@@ -59,10 +60,7 @@ public class TopicToTableValidator implements ConfigDef.Validator {
 
     try {
       // Try to parse the topic-to-table map using the utility method
-      if (parseTopicToTableMap(s) == null) {
-        throw new ConfigException(
-            name, value, "Format: <topic-1>:<table-1>,<topic-2>:<table-2>,...");
-      }
+      parseTopicToTableMap(s);
     } catch (Exception e) {
       // Log the stack trace if an error occurs during validation
       throw new ConfigException(name, value, e.getMessage());
@@ -87,20 +85,38 @@ public class TopicToTableValidator implements ConfigDef.Validator {
    * key-value pairs, validating each entry along the way. If any invalid format is found, an
    * exception is thrown.
    *
-   * @param input a comma-separated list of topic-to-table mappings.
-   * @return a map where the keys are topics and the values are corresponding tables.
+   * <p>When no mappings are configured (null or empty input), this method returns an empty map. The
+   * DucklakeWriterFactory will then use the topic name itself as the table name for any unmapped
+   * topics via the getOrDefault(topic, topic) pattern.
+   *
+   * @param input a comma-separated list of topic-to-table mappings, or null/empty for no mappings.
+   * @return a map where the keys are topics and the values are corresponding tables. Returns empty
+   *     map when no mappings are configured, allowing topics to map to themselves.
    * @throws Exception if the format of the input is invalid.
    */
+  @Nonnull
   public static Map<String, String> parseTopicToTableMap(String input) throws Exception {
     Map<String, String> topic2Table = new HashMap<>();
+
+    // Handle null or empty input by returning empty map
+    if (input == null || input.trim().isEmpty()) {
+      return topic2Table;
+    }
+
     boolean isInvalid = false;
     for (String str : input.split(",")) {
+      // Skip empty strings that result from splitting empty input
+      if (str.trim().isEmpty()) {
+        continue;
+      }
+
       String[] tt = str.split(":");
 
       if (tt.length != 2 || tt[0].trim().isEmpty() || tt[1].trim().isEmpty()) {
         LOG.log(
             System.Logger.Level.ERROR, "Invalid {} config format: {}", TOPICS_TABLES_MAP, input);
-        return null;
+        isInvalid = true;
+        continue;
       }
 
       String topic = tt[0].trim();
@@ -128,7 +144,7 @@ public class TopicToTableValidator implements ConfigDef.Validator {
       topic2Table.put(tt[0].trim(), tt[1].trim());
     }
     if (isInvalid) {
-      throw new Exception("Invalidap table");
+      throw new Exception("Invalid table");
     }
     return topic2Table;
   }

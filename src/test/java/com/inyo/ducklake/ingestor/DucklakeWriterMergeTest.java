@@ -17,14 +17,13 @@ package com.inyo.ducklake.ingestor;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
+import com.inyo.ducklake.TestHelper;
 import java.nio.charset.StandardCharsets;
-import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.UUID;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.IntVector;
 import org.apache.arrow.vector.TimeStampMilliVector;
@@ -47,13 +46,7 @@ class DucklakeWriterMergeTest {
 
   @BeforeEach
   void setup() throws Exception {
-    conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:");
-    try (var st = conn.createStatement()) {
-      st.execute(
-          String.format(
-              "ATTACH 'ducklake:%s' AS lake",
-              System.getProperty("java.io.tmpdir") + "/" + UUID.randomUUID()));
-    }
+    conn = TestHelper.setupDucklakeConnection();
   }
 
   @AfterEach

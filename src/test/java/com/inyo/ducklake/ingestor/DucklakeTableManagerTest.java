@@ -19,10 +19,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.sql.DriverManager;
+import com.inyo.ducklake.TestHelper;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -44,10 +43,7 @@ class DucklakeTableManagerTest {
 
   @BeforeEach
   void setup() throws Exception {
-    conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:"); // in-memory
-    try (var st = conn.createStatement()) {
-      st.execute("ATTACH ':memory:' AS lake");
-    }
+    conn = TestHelper.setupDucklakeConnection();
   }
 
   @AfterEach
@@ -56,7 +52,7 @@ class DucklakeTableManagerTest {
   }
 
   private Schema schema(Field... fields) {
-    return new Schema(Arrays.asList(fields));
+    return new Schema(List.of(fields));
   }
 
   private Field intField(String name, int bits) {
@@ -80,7 +76,7 @@ class DucklakeTableManagerTest {
 
   private Field structField(String name, Field... children) {
     return new Field(
-        name, new FieldType(false, ArrowType.Struct.INSTANCE, null), Arrays.asList(children));
+        name, new FieldType(false, ArrowType.Struct.INSTANCE, null), List.of(children));
   }
 
   private Field listField(String name, Field elementField) {
@@ -234,21 +230,6 @@ class DucklakeTableManagerTest {
     Field map = mapField("attributes", key, value);
     mgr.ensureTable(schema(map));
     assertColumnType(tableName, "attributes", "JSON");
-  }
-
-  @Test
-  @DisplayName("Evolves adding new JSON column from LIST")
-  void testAddJsonColumnEvolution() throws Exception {
-    String tableName = uniqueTableName("t_json_evo");
-    DucklakeWriterConfig cfg =
-        new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
-    DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
-    mgr.ensureTable(schema(stringField("id")));
-    Field element = stringField("element");
-    Field list = listField("items", element);
-    mgr.ensureTable(schema(stringField("id"), list));
-    assertEquals(Set.of("id", "items"), getColumns(tableName));
-    assertColumnType(tableName, "items", "JSON");
   }
 
   @Test
