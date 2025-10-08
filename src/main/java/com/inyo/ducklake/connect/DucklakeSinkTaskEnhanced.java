@@ -30,8 +30,14 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
 
-public class DucklakeSinkTask extends SinkTask {
-  private static final System.Logger LOG = System.getLogger(String.valueOf(DucklakeSinkTask.class));
+/**
+ * Enhanced DucklakeSinkTask that supports both traditional Kafka Connect data and Arrow IPC data
+ * through VectorSchemaRoot values.
+ */
+public class DucklakeSinkTaskEnhanced extends SinkTask {
+  private static final System.Logger LOG =
+      System.getLogger(String.valueOf(DucklakeSinkTaskEnhanced.class));
+
   private DucklakeSinkConfig config;
   private DucklakeConnectionFactory connectionFactory;
   private DucklakeWriterFactory writerFactory;
@@ -191,34 +197,65 @@ public class DucklakeSinkTask extends SinkTask {
   }
 
   @Override
-  public void stop() {
-    try {
-      if (writers != null) {
-        for (DucklakeWriter w : writers.values()) {
-          try {
-            w.close();
-          } catch (Exception e) {
-            LOG.log(System.Logger.Level.WARNING, "Failed closing writer: {0}", e.getMessage());
-          }
-        }
-        writers.clear();
-        LOG.log(System.Logger.Level.INFO, "Cleared all writers");
-      }
-      if (converter != null) {
+  public void close(Collection<TopicPartition> partitions) {
+    super.close(partitions);
+
+    // Close writers for these partitions
+    for (TopicPartition partition : partitions) {
+      DucklakeWriter writer = writers.remove(partition);
+      if (writer != null) {
         try {
-          converter.close();
+          writer.close();
+          LOG.log(System.Logger.Level.INFO, "Closed writer for partition: {0}", partition);
         } catch (Exception e) {
-          LOG.log(System.Logger.Level.WARNING, "Failed closing converter: {0}", e.getMessage());
+          LOG.log(
+              System.Logger.Level.WARNING, "Failed to close writer for partition: " + partition, e);
         }
       }
-      if (allocator != null) {
+    }
+  }
+
+  @Override
+  public void stop() {
+    // Close all remaining writers
+    for (Map.Entry<TopicPartition, DucklakeWriter> entry : writers.entrySet()) {
+      try {
+        entry.getValue().close();
+        LOG.log(System.Logger.Level.INFO, "Closed writer for partition: {0}", entry.getKey());
+      } catch (Exception e) {
+        LOG.log(
+            System.Logger.Level.WARNING,
+            "Failed to close writer for partition: " + entry.getKey(),
+            e);
+      }
+    }
+    writers.clear();
+
+    // Close converter
+    if (converter != null) {
+      try {
+        converter.close();
+      } catch (Exception e) {
+        LOG.log(System.Logger.Level.WARNING, "Failed to close converter", e);
+      }
+    }
+
+    // Close allocator
+    if (allocator != null) {
+      try {
         allocator.close();
+      } catch (Exception e) {
+        LOG.log(System.Logger.Level.WARNING, "Failed to close allocator", e);
       }
-      if (connectionFactory != null) {
+    }
+
+    // Close connection factory
+    if (connectionFactory != null) {
+      try {
         connectionFactory.close();
+      } catch (Exception e) {
+        LOG.log(System.Logger.Level.WARNING, "Failed to close connection factory", e);
       }
-    } catch (Exception e) {
-      throw new RuntimeException("Failed to stop DucklakeSinkTask", e);
     }
   }
 }

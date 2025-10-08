@@ -24,8 +24,8 @@ Artifact: `build/libs/ducklake-kafka-connect-<version>.jar`.
 3. Restart the Kafka Connect worker
 4. POST the connector config (see example below) to `http://<worker-host>:8083/connectors`
 
-## Note about Java 11+ / --add-opens
-When running the connector on Java 11 or newer (for example in Docker containers or when using Testcontainers), Apache Arrow needs access to certain internal JDK packages. You must expose the java.nio package to Arrow by adding the following JVM option via the KAFKA_OPTS environment variable for the Kafka Connect worker.
+## Note about --add-opens
+When running the connector:
 
 Example (used in tests with Testcontainers):
 this.withEnv("KAFKA_OPTS", "--add-opens java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED");
@@ -51,6 +51,100 @@ CONNECT_KEY_CONVERTER=org.apache.kafka.connect.json.JsonConverter
 CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE=false
 CONNECT_VALUE_CONVERTER=org.apache.kafka.connect.json.JsonConverter
 CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE=false
+
+## Arrow IPC Converter Support
+
+The Ducklake connector now includes native support for **Arrow IPC (Inter-Process Communication)** data format through the `ArrowIpcConverter`. This allows you to send pre-serialized Arrow data directly to DuckDB without the overhead of JSON conversion.
+
+### Benefits of Arrow IPC
+- **High Performance**: Direct binary format without JSON parsing overhead
+- **Type Safety**: Preserves exact Arrow types and schemas
+- **Memory Efficiency**: Columnar format optimized for analytics
+- **Zero-Copy**: Direct processing of Arrow data structures
+
+### Using Arrow IPC Converter
+
+Configure your connector to use the Arrow IPC converter for values:
+
+```json
+{
+  "name": "ducklake-arrow-sink",
+  "config": {
+    "connector.class": "com.inyo.ducklake.connect.DucklakeSinkConnector",
+    "topics": "arrow-data-topic",
+    "value.converter": "com.inyo.ducklake.connect.ArrowIpcConverter",
+    "key.converter": "org.apache.kafka.connect.storage.StringConverter",
+    "ducklake.connection.url": "jdbc:duckdb:/path/to/database.db",
+    "ducklake.table.auto.create": "true"
+  }
+}
+```
+
+### Python Example with PyArrow
+
+You can also produce Arrow IPC data from Python:
+
+```python
+import pyarrow as pa
+import pyarrow.ipc as ipc
+from kafka import KafkaProducer
+import io
+
+# Create Arrow table
+data = {
+    'id': [1001, 1002, 1003],
+    'name': ['Alice', 'Bob', 'Charlie'],
+    'age': [25, 30, 35],
+    'timestamp': [1640995200000, 1640995260000, 1640995320000]
+}
+
+table = pa.table(data)
+
+# Serialize to Arrow IPC bytes
+buffer = io.BytesIO()
+with ipc.new_stream(buffer, table.schema) as writer:
+    writer.write_table(table)
+
+arrow_ipc_bytes = buffer.getvalue()
+
+# Send to Kafka
+producer = KafkaProducer(
+    bootstrap_servers=['localhost:9092'],
+    value_serializer=lambda x: x  # Send raw bytes
+)
+
+producer.send('arrow-data-topic', value=arrow_ipc_bytes)
+producer.flush()
+```
+
+### Mixed Data Support
+
+The connector automatically detects the data format and handles both traditional JSON data and Arrow IPC data seamlessly:
+
+- **Traditional data**: Processed using `SinkRecordToArrowConverter` (JSON → Arrow → DuckDB)
+- **Arrow IPC data**: Processed directly as `VectorSchemaRoot` (Arrow IPC → DuckDB)
+
+This means you can migrate gradually from JSON to Arrow IPC without changing your connector configuration.
+
+### Performance Considerations
+
+When using Arrow IPC:
+- **Batch size**: Larger batches generally perform better due to columnar processing
+- **Schema consistency**: Keep schemas consistent across batches for optimal performance
+- **Memory allocation**: Arrow uses off-heap memory; monitor memory usage in high-throughput scenarios
+
+### Troubleshooting Arrow IPC
+
+Common issues and solutions:
+
+1. **OutOfMemoryError**: Increase JVM heap size or reduce batch sizes
+2. **Schema mismatch**: Ensure consistent Arrow schemas across producers
+3. **Invalid IPC data**: Verify Arrow IPC serialization is correct
+
+Example JVM settings for Arrow workloads:
+```
+-Xmx4g -XX:MaxDirectMemorySize=2g
+```
 
 ## Configuration (Core Properties)
 See `DucklakeSinkConfig` for authoritative definitions.
@@ -157,4 +251,3 @@ This will partition the table by:
   }
 }
 ```
-

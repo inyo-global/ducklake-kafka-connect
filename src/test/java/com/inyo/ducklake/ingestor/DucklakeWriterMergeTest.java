@@ -36,7 +36,6 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -109,7 +108,6 @@ class DucklakeWriterMergeTest {
   }
 
   @Test
-  @Disabled("Waiting ducklake version 1.4.1 that fix merge into with partition by")
   @DisplayName("Upsert via MERGE updates existing rows and inserts new ones")
   void testMergeUpsert() throws Exception {
     DucklakeWriterConfig cfg =

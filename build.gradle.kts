@@ -17,7 +17,7 @@ tasks.jar {
 
 tasks.shadowJar {
     archiveBaseName.set("ducklake-connector")
-    archiveClassifier.set("all") // usar classifier para não sobrescrever o jar padrão
+    archiveClassifier.set("all")
     mergeServiceFiles()
 }
 
@@ -36,6 +36,24 @@ tasks.withType<com.github.spotbugs.snom.SpotBugsTask> {
 tasks.test {
     useJUnitPlatform()
     jvmArgs("--add-opens=java.base/java.nio=ALL-UNNAMED")
+
+    // Significantly increase memory allocation for Arrow operations
+    minHeapSize = "512m"
+    maxHeapSize = "2g"
+
+    // Add stable memory management JVM options
+    jvmArgs(
+        "-XX:+UseG1GC",
+        "-XX:MaxGCPauseMillis=100",
+        "-XX:+HeapDumpOnOutOfMemoryError",
+        "-XX:HeapDumpPath=build/heap-dumps/",
+        "-XX:MaxMetaspaceSize=512m"
+    )
+
+    // Set system properties for better debugging
+    systemProperty("junit.jupiter.execution.parallel.enabled", "false")
+    systemProperty("junit.jupiter.execution.timeout.default", "300s")
+
 }
 
 tasks.check {
@@ -143,7 +161,7 @@ spotless {
 }
 
 dependencies {
-    implementation("org.duckdb:duckdb_jdbc:1.4.0.0")
+    implementation("org.duckdb:duckdb_jdbc:1.4.1.0")
     implementation("org.apache.arrow:arrow-vector:18.3.0") {
         exclude(group = "org.slf4j")
     }
