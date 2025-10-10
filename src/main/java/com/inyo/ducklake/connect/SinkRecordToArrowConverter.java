@@ -316,7 +316,9 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
     int rowIndex = 0;
     for (SinkRecord record : records) {
       // Check if we need to reallocate (safety check)
-      if (rowIndex >= root.getFieldVectors().get(0).getValueCapacity()) {
+      // Only check capacity if we have field vectors
+      if (!root.getFieldVectors().isEmpty()
+          && rowIndex >= root.getFieldVectors().get(0).getValueCapacity()) {
         LOG.log(
             System.Logger.Level.INFO,
             "Reallocating vectors due to capacity exceeded at row: {0}",
