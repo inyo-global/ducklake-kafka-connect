@@ -74,7 +74,6 @@ val integrationTest by tasks.registering(Test::class) {
     useJUnitPlatform()
 
     // Add JVM arguments required for Apache Arrow
-    jvmArgs("--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED")
     jvmArgs("--add-opens=java.base/java.nio=ALL-UNNAMED")
 
     // Enable debugging
