@@ -50,7 +50,8 @@ public class DucklakeSinkTask extends SinkTask {
     this.connectionFactory = new DucklakeConnectionFactory(config);
     this.writers = new HashMap<>();
     this.allocator = new RootAllocator();
-    this.converter = new SinkRecordToArrowConverter(allocator);
+    this.converter =
+        new SinkRecordToArrowConverter(allocator, config.getConsumerOverrideMaxPollRecords());
   }
 
   @Override
@@ -126,10 +127,22 @@ public class DucklakeSinkTask extends SinkTask {
       DucklakeWriter writer = writers.get(partition);
       if (writer == null) {
         LOG.log(System.Logger.Level.WARNING, "No writer found for partition: {0}", partition);
+        // Close VectorSchemaRoot objects even if no writer is found
+        for (VectorSchemaRoot vectorSchemaRoot : vectorRoots) {
+          try {
+            vectorSchemaRoot.close();
+          } catch (Exception e) {
+            LOG.log(
+                System.Logger.Level.WARNING,
+                "Failed to close VectorSchemaRoot for partition {0}: {1}",
+                partition,
+                e.getMessage());
+          }
+        }
         continue;
       }
 
-      // Write each VectorSchemaRoot directly
+      // Write each VectorSchemaRoot and ensure proper cleanup
       for (VectorSchemaRoot vectorSchemaRoot : vectorRoots) {
         try {
           writer.write(vectorSchemaRoot);
@@ -145,9 +158,18 @@ public class DucklakeSinkTask extends SinkTask {
               "Failed to write Arrow IPC data for partition: " + partition,
               e);
           throw new RuntimeException("Failed to write Arrow IPC data", e);
+        } finally {
+          // Always close VectorSchemaRoot to prevent memory leaks
+          try {
+            vectorSchemaRoot.close();
+          } catch (Exception e) {
+            LOG.log(
+                System.Logger.Level.WARNING,
+                "Failed to close VectorSchemaRoot for partition {0}: {1}",
+                partition,
+                e.getMessage());
+          }
         }
-        // Note: VectorSchemaRoot from Arrow IPC converter should be managed by the converter
-        // We don't close it here as it might be reused
       }
     }
   }
@@ -172,6 +194,16 @@ public class DucklakeSinkTask extends SinkTask {
       DucklakeWriter writer = writers.get(partition);
       if (writer == null) {
         LOG.log(System.Logger.Level.WARNING, "No writer found for partition: {0}", partition);
+        // Ensure VectorSchemaRoot is closed even when no writer is found
+        try {
+          vectorSchemaRoot.close();
+        } catch (Exception e) {
+          LOG.log(
+              System.Logger.Level.WARNING,
+              "Failed to close VectorSchemaRoot for partition {0}: {1}",
+              partition,
+              e.getMessage());
+        }
         continue;
       }
 
@@ -185,7 +217,15 @@ public class DucklakeSinkTask extends SinkTask {
             partition);
       } finally {
         // Always close the VectorSchemaRoot to free memory (from traditional converter)
-        vectorSchemaRoot.close();
+        try {
+          vectorSchemaRoot.close();
+        } catch (Exception e) {
+          LOG.log(
+              System.Logger.Level.WARNING,
+              "Failed to close VectorSchemaRoot for partition {0}: {1}",
+              partition,
+              e.getMessage());
+        }
       }
     }
   }

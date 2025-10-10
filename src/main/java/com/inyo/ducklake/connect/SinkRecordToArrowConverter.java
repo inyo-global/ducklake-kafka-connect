@@ -60,16 +60,22 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
   private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
 
   private final BufferAllocator allocator;
+  private final int maxPollRecords;
 
   // not closed here
 
   public SinkRecordToArrowConverter(BufferAllocator externalAllocator) {
+    this(externalAllocator, 1024);
+  }
+
+  public SinkRecordToArrowConverter(BufferAllocator externalAllocator, int maxPollRecords) {
     if (externalAllocator == null) {
       throw new IllegalArgumentException("Allocator cannot be null");
     }
     // Create a child allocator to avoid exposing internal representation / accidental over-release
     this.allocator =
         externalAllocator.newChildAllocator("sink-record-converter", 0, Long.MAX_VALUE);
+    this.maxPollRecords = maxPollRecords > 0 ? maxPollRecords : 1024;
   }
 
   @Override
@@ -193,8 +199,9 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       List<SinkRecord> partitionRecords = entry.getValue();
 
       if (!partitionRecords.isEmpty()) {
+        VectorSchemaRoot vectorSchemaRoot = null;
         try {
-          VectorSchemaRoot vectorSchemaRoot = convertRecords(partitionRecords);
+          vectorSchemaRoot = convertRecords(partitionRecords);
           result.put(partition, vectorSchemaRoot);
 
           LOG.log(
@@ -203,6 +210,18 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
               partition,
               partitionRecords.size());
         } catch (Exception e) {
+          // Ensure cleanup if conversion fails
+          if (vectorSchemaRoot != null) {
+            try {
+              vectorSchemaRoot.close();
+            } catch (Exception closeException) {
+              LOG.log(
+                  System.Logger.Level.WARNING,
+                  "Failed to close VectorSchemaRoot during exception cleanup for partition {0}: {1}",
+                  partition,
+                  closeException.getMessage());
+            }
+          }
           LOG.log(
               System.Logger.Level.ERROR,
               "Failed to convert records for partition: " + partition,
@@ -246,8 +265,49 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
 
   private void populateVectors(
       VectorSchemaRoot root, Collection<SinkRecord> records, Schema schema) {
-    // Initialize all vectors
-    root.allocateNew();
+    // Calculate capacity needed based on record count
+    int recordCount = records.size();
+
+    // Pre-allocate vectors with sufficient capacity
+    // Use maxPollRecords configuration or at least the actual record count
+    int initialCapacity = Math.max(recordCount, maxPollRecords);
+
+    // Estimate bytes needed for variable-width fields (strings, binary)
+    // Use a conservative estimate of 256 bytes per string field per record
+    int estimatedBytesPerRecord =
+        schema.getFields().stream()
+            .mapToInt(
+                field -> {
+                  if (field.getType().getTypeID()
+                          == org.apache.arrow.vector.types.pojo.ArrowType.ArrowTypeID.Utf8
+                      || field.getType().getTypeID()
+                          == org.apache.arrow.vector.types.pojo.ArrowType.ArrowTypeID.Binary) {
+                    return 256; // Conservative estimate for string/binary fields
+                  }
+                  return 0;
+                })
+            .sum();
+
+    int totalEstimatedBytes =
+        Math.max(estimatedBytesPerRecord * recordCount, 64 * 1024); // At least 64KB
+
+    // Allocate vectors with calculated capacity
+    for (FieldVector vector : root.getFieldVectors()) {
+      if (vector instanceof org.apache.arrow.vector.BaseVariableWidthVector) {
+        // For variable-width vectors (strings, binary), allocate with byte capacity
+        ((org.apache.arrow.vector.BaseVariableWidthVector) vector)
+            .allocateNew(totalEstimatedBytes, initialCapacity);
+      } else {
+        // For fixed-width vectors, first allocate with default then resize
+        vector.allocateNew();
+        // Resize to desired capacity if current capacity is less
+        if (vector.getValueCapacity() < initialCapacity) {
+          while (vector.getValueCapacity() < initialCapacity) {
+            vector.reAlloc();
+          }
+        }
+      }
+    }
 
     // Create mapping of field names to vectors
     Map<String, FieldVector> vectorMap = createVectorMap(root, schema);
@@ -255,6 +315,18 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
     // Populate data row by row
     int rowIndex = 0;
     for (SinkRecord record : records) {
+      // Check if we need to reallocate (safety check)
+      if (rowIndex >= root.getFieldVectors().get(0).getValueCapacity()) {
+        LOG.log(
+            System.Logger.Level.INFO,
+            "Reallocating vectors due to capacity exceeded at row: {0}",
+            rowIndex);
+
+        for (FieldVector vector : root.getFieldVectors()) {
+          vector.reAlloc();
+        }
+      }
+
       if (record.value() instanceof Struct) {
         populateStructData(vectorMap, (Struct) record.value(), rowIndex);
       } else {

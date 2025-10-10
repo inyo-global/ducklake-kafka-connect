@@ -38,6 +38,7 @@ public class DucklakeSinkConfig extends AbstractConfig {
   static final String S3_ENDPOINT = "s3.endpoint";
   static final String S3_ACCESS_KEY_ID = "s3.access_key_id";
   static final String S3_SECRET_ACCESS_KEY = "s3.secret_access_key";
+  static final String CONSUMER_OVERRIDE_MAX_POLL_RECORDS = "consumer.override.max.poll.records";
 
   // Table-specific configuration property patterns
   static final String TABLE_ID_COLUMNS_PATTERN = "ducklake.table.%s.id-columns";
@@ -85,7 +86,13 @@ public class DucklakeSinkConfig extends AbstractConfig {
             S3_SECRET_ACCESS_KEY,
             ConfigDef.Type.STRING,
             ConfigDef.Importance.HIGH,
-            "The secret of the key to use");
+            "The secret of the key to use")
+        .define(
+            CONSUMER_OVERRIDE_MAX_POLL_RECORDS,
+            ConfigDef.Type.INT,
+            1024,
+            ConfigDef.Importance.MEDIUM,
+            "Maximum number of records returned in a single call to poll(). Defaults to 1024 if not specified.");
   }
 
   public DucklakeSinkConfig(ConfigDef definition, Map<?, ?> originals) {
@@ -118,6 +125,10 @@ public class DucklakeSinkConfig extends AbstractConfig {
 
   public String getDataPath() {
     return getString(DATA_PATH);
+  }
+
+  public int getConsumerOverrideMaxPollRecords() {
+    return getInt(CONSUMER_OVERRIDE_MAX_POLL_RECORDS);
   }
 
   public Map<String, String> getTopicToTableMap() {

@@ -338,4 +338,53 @@ class SinkRecordToArrowConverterTest {
     assertEquals("eve", new String(nameVec.get(FIRST_ELEMENT_INDEX), StandardCharsets.UTF_8));
     root.close();
   }
+
+  @Test
+  @DisplayName(
+      "Handles large dataset that would cause IndexOutOfBoundsException without proper allocation")
+  void testLargeDatasetBufferOverflow() {
+    // Given: Many records with large string values that would exceed default buffer capacity
+    var kafkaSchema =
+        SchemaBuilder.struct()
+            .field("id", org.apache.kafka.connect.data.Schema.INT32_SCHEMA)
+            .field("large_text", org.apache.kafka.connect.data.Schema.STRING_SCHEMA)
+            .build();
+
+    // Create a large string that's approximately 1KB
+    var largeString = "A".repeat(1024);
+
+    // Create many records that would exceed the default 32KB buffer
+    // With 1KB strings and 40 records, we'll exceed 32KB easily
+    var records = new java.util.ArrayList<SinkRecord>();
+    for (int i = 0; i < 40; i++) {
+      var struct =
+          new Struct(kafkaSchema)
+              .put("id", i)
+              .put("large_text", largeString + "_" + i); // Make each string unique
+      records.add(new SinkRecord("topic", 0, null, null, kafkaSchema, struct, i));
+    }
+
+    // When: Converting these records should not throw IndexOutOfBoundsException
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var root = converter.convertRecords(records);
+
+    // Then: All records should be converted successfully
+    assertEquals(40, root.getRowCount());
+
+    // Verify first and last records
+    IntVector idVec = (IntVector) root.getVector("id");
+    VarCharVector textVec = (VarCharVector) root.getVector("large_text");
+
+    assertEquals(0, idVec.get(0));
+    assertEquals(39, idVec.get(39));
+
+    var firstText = new String(textVec.get(0), StandardCharsets.UTF_8);
+    var lastText = new String(textVec.get(39), StandardCharsets.UTF_8);
+
+    assertEquals(largeString + "_0", firstText);
+    assertEquals(largeString + "_39", lastText);
+
+    root.close();
+    converter.close();
+  }
 }
