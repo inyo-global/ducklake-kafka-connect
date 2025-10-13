@@ -31,8 +31,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 /**
- * Test to demonstrate improved error messages with better sample value collection.
- * This test shows how the new implementation collects diverse samples instead of just the first 5 values.
+ * Test to demonstrate improved error messages with better sample value collection. This test shows
+ * how the new implementation collects diverse samples instead of just the first 5 values.
  */
 class ImprovedErrorMessageTest {
 
@@ -54,70 +54,114 @@ class ImprovedErrorMessageTest {
   @Test
   void testImprovedErrorMessageShowsDifferentTypes() {
     // Create schema with address as struct
-    var structSchema = SchemaBuilder.struct()
-        .field("address", SchemaBuilder.struct()
-            .field("zipcode", Schema.STRING_SCHEMA)
-            .field("id", Schema.STRING_SCHEMA)
-            .build())
-        .field("person", SchemaBuilder.struct()
-            .field("firstName", Schema.STRING_SCHEMA)
-            .field("lastName", Schema.STRING_SCHEMA)
-            .build())
-        .build();
+    var structSchema =
+        SchemaBuilder.struct()
+            .field(
+                "address",
+                SchemaBuilder.struct()
+                    .field("zipcode", Schema.STRING_SCHEMA)
+                    .field("id", Schema.STRING_SCHEMA)
+                    .build())
+            .field(
+                "person",
+                SchemaBuilder.struct()
+                    .field("firstName", Schema.STRING_SCHEMA)
+                    .field("lastName", Schema.STRING_SCHEMA)
+                    .build())
+            .build();
 
     // Create schema with address as string (incompatible)
-    var stringSchema = SchemaBuilder.struct()
-        .field("address", Schema.STRING_SCHEMA)  // This is the incompatible field
-        .field("person", SchemaBuilder.struct()
-            .field("firstName", Schema.STRING_SCHEMA)
-            .field("lastName", Schema.STRING_SCHEMA)
-            .build())
-        .build();
+    var stringSchema =
+        SchemaBuilder.struct()
+            .field("address", Schema.STRING_SCHEMA) // This is the incompatible field
+            .field(
+                "person",
+                SchemaBuilder.struct()
+                    .field("firstName", Schema.STRING_SCHEMA)
+                    .field("lastName", Schema.STRING_SCHEMA)
+                    .build())
+            .build();
 
     // Create multiple compatible records (struct address)
-    var addressStruct1 = new Struct(structSchema.field("address").schema())
-        .put("zipcode", "90813")
-        .put("id", "ece4a138-bc4e-4d4f-aca4-4fb8d997dfea");
+    var addressStruct1 =
+        new Struct(structSchema.field("address").schema())
+            .put("zipcode", "90813")
+            .put("id", "ece4a138-bc4e-4d4f-aca4-4fb8d997dfea");
 
-    var person1 = new Struct(structSchema.field("person").schema())
-        .put("firstName", "John")
-        .put("lastName", "Doe");
+    var person1 =
+        new Struct(structSchema.field("person").schema())
+            .put("firstName", "John")
+            .put("lastName", "Doe");
 
-    var record1 = new SinkRecord("test", 0, null, null, structSchema,
-        new Struct(structSchema)
-            .put("address", addressStruct1)
-            .put("person", person1), 0);
+    var record1 =
+        new SinkRecord(
+            "test",
+            0,
+            null,
+            null,
+            structSchema,
+            new Struct(structSchema).put("address", addressStruct1).put("person", person1),
+            0);
 
-    var record2 = new SinkRecord("test", 0, null, null, structSchema,
-        new Struct(structSchema)
-            .put("address", addressStruct1)
-            .put("person", person1), 1);
+    var record2 =
+        new SinkRecord(
+            "test",
+            0,
+            null,
+            null,
+            structSchema,
+            new Struct(structSchema).put("address", addressStruct1).put("person", person1),
+            1);
 
-    var record3 = new SinkRecord("test", 0, null, null, structSchema,
-        new Struct(structSchema)
-            .put("address", addressStruct1)
-            .put("person", person1), 2);
+    var record3 =
+        new SinkRecord(
+            "test",
+            0,
+            null,
+            null,
+            structSchema,
+            new Struct(structSchema).put("address", addressStruct1).put("person", person1),
+            2);
 
-    var record4 = new SinkRecord("test", 0, null, null, structSchema,
-        new Struct(structSchema)
-            .put("address", addressStruct1)
-            .put("person", person1), 3);
+    var record4 =
+        new SinkRecord(
+            "test",
+            0,
+            null,
+            null,
+            structSchema,
+            new Struct(structSchema).put("address", addressStruct1).put("person", person1),
+            3);
 
     // Create one incompatible record (string address) - this should be captured in samples
-    var person2 = new Struct(stringSchema.field("person").schema())
-        .put("firstName", "Jane")
-        .put("lastName", "Smith");
+    var person2 =
+        new Struct(stringSchema.field("person").schema())
+            .put("firstName", "Jane")
+            .put("lastName", "Smith");
 
-    var incompatibleRecord = new SinkRecord("test", 0, null, null, stringSchema,
-        new Struct(stringSchema)
-            .put("address", "123 Main St")  // String instead of struct - this is the incompatible value
-            .put("person", person2), 4);
+    var incompatibleRecord =
+        new SinkRecord(
+            "test",
+            0,
+            null,
+            null,
+            stringSchema,
+            new Struct(stringSchema)
+                .put(
+                    "address",
+                    "123 Main St") // String instead of struct - this is the incompatible value
+                .put("person", person2),
+            4);
 
-    List<SinkRecord> records = Arrays.asList(record1, record2, record3, record4, incompatibleRecord);
+    List<SinkRecord> records =
+        Arrays.asList(record1, record2, record3, record4, incompatibleRecord);
 
-    var exception = assertThrows(RuntimeException.class, () -> {
-      converter.convertRecords(records);
-    });
+    var exception =
+        assertThrows(
+            RuntimeException.class,
+            () -> {
+              converter.convertRecords(records);
+            });
 
     var message = exception.getCause().getMessage();
     System.out.println("Improved error message:");
@@ -129,7 +173,8 @@ class ImprovedErrorMessageTest {
 
     // The new implementation should show both the struct and string samples for the address field
     // This will help users understand what types are conflicting
-    assertTrue(message.contains("Struct") || message.contains("String"),
+    assertTrue(
+        message.contains("Struct") || message.contains("String"),
         "Error should show the different types that are conflicting");
   }
 }
