@@ -267,54 +267,84 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
   }
 
   /**
-   * Collects sample values from records for each field to help with error messages.
+   * Collects sample values from records for each field to help with error messages. This method
+   * collects diverse samples showing different types/schemas for each field, rather than just the
+   * first few values.
    *
    * @param records Collection of sink records
    * @return Map of field names to sample values
    */
   private Map<String, List<Object>> collectSampleValues(Collection<SinkRecord> records) {
-    Map<String, List<Object>> sampleValues = new HashMap<>();
+    Map<String, Map<String, Object>> fieldTypeSamples = new HashMap<>();
 
     for (SinkRecord record : records) {
       if (record.value() instanceof Struct struct) {
-        collectStructSampleValues(struct, sampleValues, "");
+        collectStructSampleValuesWithTypes(struct, fieldTypeSamples, "");
       } else if (record.value() != null) {
         // Handle non-struct values
-        sampleValues.computeIfAbsent("root", k -> new ArrayList<>()).add(record.value());
+        var typeKey = record.value().getClass().getSimpleName();
+        fieldTypeSamples
+            .computeIfAbsent("root", k -> new HashMap<>())
+            .putIfAbsent(typeKey, record.value());
       }
     }
 
-    // Limit sample values to avoid excessive memory usage (keep max 5 samples per field)
-    sampleValues.replaceAll(
-        (fieldName, values) -> values.size() > 5 ? values.subList(0, 5) : values);
+    // Convert to the expected format, keeping one sample per unique type per field
+    Map<String, List<Object>> sampleValues = new HashMap<>();
+    for (Map.Entry<String, Map<String, Object>> entry : fieldTypeSamples.entrySet()) {
+      var fieldName = entry.getKey();
+      var typeSamples = entry.getValue();
+      sampleValues.put(fieldName, new ArrayList<>(typeSamples.values()));
+    }
 
     return sampleValues;
   }
 
   /**
-   * Recursively collects sample values from a Struct.
+   * Recursively collects sample values from a Struct, keeping one sample per type per field.
    *
    * @param struct The struct to extract values from
-   * @param sampleValues Map to store sample values
+   * @param fieldTypeSamples Map to store sample values by field name and type
    * @param prefix Field name prefix for nested structures
    */
-  private void collectStructSampleValues(
-      Struct struct, Map<String, List<Object>> sampleValues, String prefix) {
+  private void collectStructSampleValuesWithTypes(
+      Struct struct, Map<String, Map<String, Object>> fieldTypeSamples, String prefix) {
     for (org.apache.kafka.connect.data.Field field : struct.schema().fields()) {
       var fieldName = prefix.isEmpty() ? field.name() : prefix + "." + field.name();
       var value = struct.get(field);
 
       if (value != null) {
+        var typeKey = getTypeKey(value);
+
+        // Store the actual field value (not the entire struct) for the specific field
+        fieldTypeSamples
+            .computeIfAbsent(field.name(), k -> new HashMap<>())
+            .putIfAbsent(typeKey, value);
+
         if (value instanceof Struct nestedStruct) {
-          // Store the struct value itself under the field name for schema merging
-          sampleValues.computeIfAbsent(field.name(), k -> new ArrayList<>()).add(value);
           // Handle nested structs - recurse into the structure
-          collectStructSampleValues(nestedStruct, sampleValues, fieldName);
-        } else {
-          // Store the actual value
-          sampleValues.computeIfAbsent(fieldName, k -> new ArrayList<>()).add(value);
+          collectStructSampleValuesWithTypes(nestedStruct, fieldTypeSamples, fieldName);
         }
       }
+    }
+  }
+
+  /**
+   * Gets a type key for categorizing values by their type/schema. This helps identify different
+   * schemas for the same field.
+   */
+  private String getTypeKey(Object value) {
+    if (value instanceof Struct struct) {
+      // For structs, include schema info to distinguish different struct schemas
+      var schema = struct.schema();
+      var fieldNames =
+          schema.fields().stream()
+              .map(org.apache.kafka.connect.data.Field::name)
+              .sorted()
+              .collect(Collectors.joining(","));
+      return "Struct{" + fieldNames + "}";
+    } else {
+      return value.getClass().getSimpleName();
     }
   }
 
