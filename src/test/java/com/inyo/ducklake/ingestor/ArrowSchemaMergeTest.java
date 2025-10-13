@@ -16,7 +16,11 @@
 package com.inyo.ducklake.ingestor;
 
 import static com.inyo.ducklake.ingestor.ArrowSchemaMerge.unifySchemas;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -49,8 +53,7 @@ class ArrowSchemaMergeTest {
       Schema schema2 = new Schema(Arrays.asList(field1, field2));
 
       // When
-      Schema unified =
-          ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
+      Schema unified = ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
 
       // Then
       assertEquals(2, unified.getFields().size());
@@ -121,8 +124,7 @@ class ArrowSchemaMergeTest {
     void shouldThrowExceptionForNullOrEmptySchemaList() {
       // Then
       assertThrows(
-          IllegalArgumentException.class,
-          () -> ArrowSchemaMerge.unifySchemas(null, HashMap::new));
+          IllegalArgumentException.class, () -> ArrowSchemaMerge.unifySchemas(null, HashMap::new));
       assertThrows(
           IllegalArgumentException.class,
           () -> ArrowSchemaMerge.unifySchemas(Collections.emptyList(), HashMap::new));
@@ -167,8 +169,7 @@ class ArrowSchemaMergeTest {
       Schema schema2 = new Schema(Collections.singletonList(field2));
 
       // When
-      Schema unified =
-          ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
+      Schema unified = ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
 
       // Then
       Field unifiedField = unified.getFields().get(0);
@@ -190,8 +191,7 @@ class ArrowSchemaMergeTest {
       Schema schema2 = new Schema(Collections.singletonList(field2));
 
       // When
-      Schema unified =
-          ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
+      Schema unified = ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
 
       // Then
       Field unifiedField = unified.getFields().get(0);
@@ -213,9 +213,7 @@ class ArrowSchemaMergeTest {
       // Then
       assertThrows(
           IllegalArgumentException.class,
-          () ->
-              ArrowSchemaMerge.unifySchemas(
-                  Arrays.asList(schema1, schema2), HashMap::new));
+          () -> ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new));
     }
   }
 
@@ -238,8 +236,7 @@ class ArrowSchemaMergeTest {
       Schema schema2 = new Schema(Collections.singletonList(struct2));
 
       // When
-      Schema unified =
-          ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
+      Schema unified = ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
 
       // Then
       assertEquals(1, unified.getFields().size());
@@ -284,8 +281,7 @@ class ArrowSchemaMergeTest {
       Schema schema2 = new Schema(Collections.singletonList(map2));
 
       // When
-      Schema unified =
-          ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
+      Schema unified = ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
 
       // Then
       assertEquals(1, unified.getFields().size());
