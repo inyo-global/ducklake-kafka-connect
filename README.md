@@ -251,4 +251,3 @@ This will partition the table by:
   }
 }
 ```
-
