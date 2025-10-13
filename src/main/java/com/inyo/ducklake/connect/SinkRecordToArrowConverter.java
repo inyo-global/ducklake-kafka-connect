@@ -20,6 +20,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.inyo.ducklake.ingestor.ArrowSchemaMerge;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -163,7 +164,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       }
 
       // Unify all schemas into a single schema
-      Schema unifiedSchema = unifySchemas(arrowSchemas);
+      Schema unifiedSchema = unifySchemas(arrowSchemas, records);
 
       // Create and populate VectorSchemaRoot
       VectorSchemaRoot vectorSchemaRoot = VectorSchemaRoot.create(unifiedSchema, allocator);
@@ -256,11 +257,72 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
         .collect(Collectors.toList());
   }
 
-  private Schema unifySchemas(List<Schema> arrowSchemas) {
+  private Schema unifySchemas(List<Schema> arrowSchemas, Collection<SinkRecord> records) {
     if (arrowSchemas.size() == 1) {
       return arrowSchemas.get(0);
     }
-    return ArrowSchemaMerge.unifySchemas(arrowSchemas);
+
+    // Collect sample values for each field to help with error messages
+    Map<String, List<Object>> sampleValues = collectSampleValues(records);
+
+    try {
+      return ArrowSchemaMerge.unifySchemas(arrowSchemas);
+    } catch (IllegalArgumentException e) {
+      // If basic unification fails, try with sample values for better error messages
+      return ArrowSchemaMerge.unifySchemasWithSamples(arrowSchemas, sampleValues);
+    }
+  }
+
+  /**
+   * Collects sample values from records for each field to help with error messages.
+   *
+   * @param records Collection of sink records
+   * @return Map of field names to sample values
+   */
+  private Map<String, List<Object>> collectSampleValues(Collection<SinkRecord> records) {
+    Map<String, List<Object>> sampleValues = new HashMap<>();
+
+    for (SinkRecord record : records) {
+      if (record.value() instanceof Struct struct) {
+        collectStructSampleValues(struct, sampleValues, "");
+      } else if (record.value() != null) {
+        // Handle non-struct values
+        sampleValues.computeIfAbsent("root", k -> new ArrayList<>()).add(record.value());
+      }
+    }
+
+    // Limit sample values to avoid excessive memory usage (keep max 5 samples per field)
+    sampleValues.replaceAll(
+        (fieldName, values) -> values.size() > 5 ? values.subList(0, 5) : values);
+
+    return sampleValues;
+  }
+
+  /**
+   * Recursively collects sample values from a Struct.
+   *
+   * @param struct The struct to extract values from
+   * @param sampleValues Map to store sample values
+   * @param prefix Field name prefix for nested structures
+   */
+  private void collectStructSampleValues(
+      Struct struct, Map<String, List<Object>> sampleValues, String prefix) {
+    for (org.apache.kafka.connect.data.Field field : struct.schema().fields()) {
+      var fieldName = prefix.isEmpty() ? field.name() : prefix + "." + field.name();
+      var value = struct.get(field);
+
+      if (value != null) {
+        if (value instanceof Struct nestedStruct) {
+          // Store the struct value itself under the field name for schema merging
+          sampleValues.computeIfAbsent(field.name(), k -> new ArrayList<>()).add(value);
+          // Handle nested structs - recurse into the structure
+          collectStructSampleValues(nestedStruct, sampleValues, fieldName);
+        } else {
+          // Store the actual value
+          sampleValues.computeIfAbsent(fieldName, k -> new ArrayList<>()).add(value);
+        }
+      }
+    }
   }
 
   private void populateVectors(

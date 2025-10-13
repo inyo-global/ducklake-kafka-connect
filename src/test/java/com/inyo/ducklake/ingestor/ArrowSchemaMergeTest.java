@@ -15,6 +15,7 @@
  */
 package com.inyo.ducklake.ingestor;
 
+import static com.inyo.ducklake.ingestor.ArrowSchemaMerge.unifySchemasWithSamples;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -23,6 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import org.apache.arrow.vector.types.FloatingPointPrecision;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
@@ -352,6 +354,111 @@ class ArrowSchemaMergeTest {
       // Then
       assertEquals(1, updatedSchema.getFields().size());
       assertEquals("id", updatedSchema.getFields().get(0).getName());
+    }
+  }
+
+  @Nested
+  @DisplayName("Enhanced Error Messaging Tests")
+  class EnhancedErrorMessagingTests {
+
+    @Test
+    @DisplayName("Should provide sample values in error message when unifying incompatible types")
+    void shouldProvideSampleValuesInErrorMessage() {
+      // Given
+      Field structField =
+          createStructField(
+              "address",
+              Arrays.asList(
+                  createField("street", ArrowType.Utf8.INSTANCE, false),
+                  createField("city", ArrowType.Utf8.INSTANCE, false)));
+      Field stringField = createField("address", ArrowType.Utf8.INSTANCE, false);
+
+      Schema schema1 = new Schema(Collections.singletonList(structField));
+      Schema schema2 = new Schema(Collections.singletonList(stringField));
+
+      var sampleValues =
+          Map.of(
+              "address",
+              Arrays.asList(Map.of("street", "123 Main St", "city", "New York"), "456 Oak Avenue"));
+
+      // When & Then
+      var exception =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> unifySchemasWithSamples(Arrays.asList(schema1, schema2), sampleValues));
+
+      assertTrue(exception.getMessage().contains("Sample values:"));
+      assertTrue(exception.getMessage().contains("123 Main St"));
+      assertTrue(exception.getMessage().contains("456 Oak Avenue"));
+      assertTrue(exception.getMessage().contains("address"));
+    }
+
+    @Test
+    @DisplayName("Should handle null sample values gracefully")
+    void shouldHandleNullSampleValuesGracefully() {
+      // Given
+      Field intField = createField("id", new ArrowType.Int(32, true), false);
+      Field stringField = createField("id", ArrowType.Utf8.INSTANCE, false);
+
+      Schema schema1 = new Schema(Collections.singletonList(intField));
+      Schema schema2 = new Schema(Collections.singletonList(stringField));
+
+      Map<String, List<Object>> sampleValues =
+          Map.of("id", Arrays.asList((Object) 42, (Object) "string-id"));
+
+      // When & Then
+      var exception =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> unifySchemasWithSamples(Arrays.asList(schema1, schema2), sampleValues));
+
+      assertTrue(exception.getMessage().contains("Sample values:"));
+      assertTrue(exception.getMessage().contains("42"));
+      assertTrue(exception.getMessage().contains("string-id"));
+    }
+
+    @Test
+    @DisplayName("Should handle empty sample values map")
+    void shouldHandleEmptySampleValuesMap() {
+      // Given
+      Field intField = createField("count", new ArrowType.Int(32, true), false);
+      Field stringField = createField("count", ArrowType.Utf8.INSTANCE, false);
+
+      Schema schema1 = new Schema(Collections.singletonList(intField));
+      Schema schema2 = new Schema(Collections.singletonList(stringField));
+
+      Map<String, List<Object>> emptySampleValues = Map.of();
+
+      // When & Then
+      var exception =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> unifySchemasWithSamples(Arrays.asList(schema1, schema2), emptySampleValues));
+
+      assertTrue(exception.getMessage().contains("Sample values: null"));
+    }
+
+    @Test
+    @DisplayName("Should work with compatible schemas using sample values")
+    void shouldWorkWithCompatibleSchemasUsingSampleValues() {
+      // Given
+      Field int32Field = createField("number", new ArrowType.Int(32, true), false);
+      Field int64Field = createField("number", new ArrowType.Int(64, true), false);
+
+      Schema schema1 = new Schema(Collections.singletonList(int32Field));
+      Schema schema2 = new Schema(Collections.singletonList(int64Field));
+
+      Map<String, List<Object>> sampleValues =
+          Map.of("number", Arrays.asList((Object) 42, (Object) 123456789L));
+
+      // When
+      Schema unified = unifySchemasWithSamples(Arrays.asList(schema1, schema2), sampleValues);
+
+      // Then
+      assertEquals(1, unified.getFields().size());
+      assertEquals("number", unified.getFields().get(0).getName());
+      assertTrue(unified.getFields().get(0).getType() instanceof ArrowType.Int);
+      assertEquals(64, ((ArrowType.Int) unified.getFields().get(0).getType()).getBitWidth());
     }
   }
 

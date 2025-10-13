@@ -16,8 +16,13 @@
 package com.inyo.ducklake.connect;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -385,6 +390,251 @@ class SinkRecordToArrowConverterTest {
     assertEquals(largeString + "_39", lastText);
 
     root.close();
+    converter.close();
+  }
+
+  @Test
+  @DisplayName("Enhanced error messaging with actual sample values for struct vs string conflict")
+  void testEnhancedErrorMessagingStructVsString() {
+    // Given: Two records with conflicting types for the same field
+    var structSchema =
+        SchemaBuilder.struct()
+            .field(
+                "address",
+                SchemaBuilder.struct()
+                    .field("street", org.apache.kafka.connect.data.Schema.STRING_SCHEMA)
+                    .field("city", org.apache.kafka.connect.data.Schema.STRING_SCHEMA)
+                    .build())
+            .build();
+
+    var stringSchema =
+        SchemaBuilder.struct()
+            .field("address", org.apache.kafka.connect.data.Schema.STRING_SCHEMA)
+            .build();
+
+    var addressStruct =
+        new Struct(structSchema.field("address").schema())
+            .put("street", "123 Main St")
+            .put("city", "New York");
+
+    var record1 = new Struct(structSchema).put("address", addressStruct);
+    var record2 = new Struct(stringSchema).put("address", "456 Oak Avenue");
+
+    var sinkRecord1 = new SinkRecord("topic", 0, null, null, structSchema, record1, 0);
+    var sinkRecord2 = new SinkRecord("topic", 0, null, null, stringSchema, record2, 1);
+
+    // When & Then: Should throw exception with actual sample values
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var exception =
+        assertThrows(
+            RuntimeException.class,
+            () -> converter.convertRecords(Arrays.asList(sinkRecord1, sinkRecord2)));
+
+    // Verify the enhanced error message contains actual sample values
+    var message = exception.getCause().getMessage();
+    assertTrue(message.contains("Sample values:"));
+    assertTrue(message.contains("123 Main St") || message.contains("street"));
+    assertTrue(message.contains("456 Oak Avenue"));
+    assertTrue(message.contains("address"));
+
+    converter.close();
+  }
+
+  @Test
+  @DisplayName("Enhanced error messaging with actual sample values for integer vs string conflict")
+  void testEnhancedErrorMessagingIntVsString() {
+    // Given: Two records with conflicting types for the same field
+    var intSchema =
+        SchemaBuilder.struct()
+            .field("id", org.apache.kafka.connect.data.Schema.INT32_SCHEMA)
+            .build();
+
+    var stringSchema =
+        SchemaBuilder.struct()
+            .field("id", org.apache.kafka.connect.data.Schema.STRING_SCHEMA)
+            .build();
+
+    var record1 = new Struct(intSchema).put("id", 42);
+    var record2 = new Struct(stringSchema).put("id", "string-id-123");
+
+    var sinkRecord1 = new SinkRecord("topic", 0, null, null, intSchema, record1, 0);
+    var sinkRecord2 = new SinkRecord("topic", 0, null, null, stringSchema, record2, 1);
+
+    // When & Then: Should throw exception with actual sample values
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var exception =
+        assertThrows(
+            RuntimeException.class,
+            () -> converter.convertRecords(Arrays.asList(sinkRecord1, sinkRecord2)));
+
+    // Verify the enhanced error message contains actual sample values
+    var message = exception.getCause().getMessage();
+    assertTrue(message.contains("Sample values:"));
+    assertTrue(message.contains("42"));
+    assertTrue(message.contains("string-id-123"));
+    assertTrue(message.contains("id"));
+
+    converter.close();
+  }
+
+  @Test
+  @DisplayName("Enhanced error messaging with boolean vs float conflict")
+  void testEnhancedErrorMessagingBoolVsFloat() {
+    // Given: Records with boolean vs string conflict (truly incompatible types)
+    var boolSchema =
+        SchemaBuilder.struct()
+            .field("flag", org.apache.kafka.connect.data.Schema.BOOLEAN_SCHEMA)
+            .build();
+
+    var stringSchema =
+        SchemaBuilder.struct()
+            .field("flag", org.apache.kafka.connect.data.Schema.STRING_SCHEMA)
+            .build();
+
+    var record1 = new Struct(boolSchema).put("flag", true);
+    var record2 = new Struct(stringSchema).put("flag", "not-a-boolean");
+
+    var sinkRecord1 = new SinkRecord("topic", 0, null, null, boolSchema, record1, 0);
+    var sinkRecord2 = new SinkRecord("topic", 0, null, null, stringSchema, record2, 1);
+
+    // When & Then: Should throw exception with detailed type information
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var exception =
+        assertThrows(
+            RuntimeException.class,
+            () -> converter.convertRecords(Arrays.asList(sinkRecord1, sinkRecord2)));
+
+    // Verify the enhanced error message contains both sample values and type descriptions
+    var message = exception.getCause().getMessage();
+    assertTrue(message.contains("Sample values:"));
+    assertTrue(message.contains("true") || message.contains("not-a-boolean"));
+    assertTrue(message.contains("flag"));
+
+    converter.close();
+  }
+
+  @Test
+  @DisplayName("Enhanced error messaging with nested struct sample values")
+  void testEnhancedErrorMessagingNestedStruct() {
+    // Given: Records with conflicting nested field types
+    var nestedStructSchema =
+        SchemaBuilder.struct()
+            .field(
+                "user",
+                SchemaBuilder.struct()
+                    .field(
+                        "profile",
+                        SchemaBuilder.struct()
+                            .field("age", org.apache.kafka.connect.data.Schema.INT32_SCHEMA)
+                            .build())
+                    .build())
+            .build();
+
+    var simpleSchema =
+        SchemaBuilder.struct()
+            .field(
+                "user",
+                SchemaBuilder.struct()
+                    .field("profile", org.apache.kafka.connect.data.Schema.STRING_SCHEMA)
+                    .build())
+            .build();
+
+    var profileStruct =
+        new Struct(nestedStructSchema.field("user").schema().field("profile").schema())
+            .put("age", 25);
+    var userStruct =
+        new Struct(nestedStructSchema.field("user").schema()).put("profile", profileStruct);
+    var record1 = new Struct(nestedStructSchema).put("user", userStruct);
+
+    var simpleUserStruct =
+        new Struct(simpleSchema.field("user").schema()).put("profile", "Simple profile string");
+    var record2 = new Struct(simpleSchema).put("user", simpleUserStruct);
+
+    var sinkRecord1 = new SinkRecord("topic", 0, null, null, nestedStructSchema, record1, 0);
+    var sinkRecord2 = new SinkRecord("topic", 0, null, null, simpleSchema, record2, 1);
+
+    // When & Then: Should throw exception with sample values for nested fields
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var exception =
+        assertThrows(
+            RuntimeException.class,
+            () -> converter.convertRecords(Arrays.asList(sinkRecord1, sinkRecord2)));
+
+    // Verify the enhanced error message contains sample values
+    var message = exception.getCause().getMessage();
+    assertTrue(message.contains("profile")); // Field name should be present
+    assertTrue(
+        message.contains("Struct")
+            || message.contains("Utf8")); // Type information should be present
+
+    converter.close();
+  }
+
+  @Test
+  @DisplayName("Sample value collection limits values to prevent memory issues")
+  void testSampleValueCollectionLimiting() {
+    // Given: Many records with the same conflicting field to test limiting
+    var intSchema =
+        SchemaBuilder.struct()
+            .field("value", org.apache.kafka.connect.data.Schema.INT32_SCHEMA)
+            .build();
+
+    var stringSchema =
+        SchemaBuilder.struct()
+            .field("value", org.apache.kafka.connect.data.Schema.STRING_SCHEMA)
+            .build();
+
+    var records = new ArrayList<SinkRecord>();
+
+    // Add 10 integer records
+    for (int i = 0; i < 10; i++) {
+      var record = new Struct(intSchema).put("value", i);
+      records.add(new SinkRecord("topic", 0, null, null, intSchema, record, i));
+    }
+
+    // Add 1 string record to cause conflict
+    var stringRecord = new Struct(stringSchema).put("value", "conflict-string");
+    records.add(new SinkRecord("topic", 0, null, null, stringSchema, stringRecord, 10));
+
+    // When & Then: Should throw exception but limit sample values
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var exception = assertThrows(RuntimeException.class, () -> converter.convertRecords(records));
+
+    // Verify error message contains sample values but not all 10 integers
+    var message = exception.getCause().getMessage();
+    assertTrue(message.contains("Sample values:"));
+    assertFalse(message.contains("6"));
+    // Should contain some but not all integer values due to limiting
+
+    converter.close();
+  }
+
+  @Test
+  @DisplayName("Enhanced error messaging works with schemaless records")
+  void testEnhancedErrorMessagingSchemaless() {
+    // Given: Schemaless records with conflicting types
+    Map<String, Object> record1 = new LinkedHashMap<>();
+    record1.put("data", Map.of("key", "value")); // Complex object
+
+    Map<String, Object> record2 = new LinkedHashMap<>();
+    record2.put("data", "simple string"); // Simple string
+
+    var sinkRecord1 = new SinkRecord("topic", 0, null, null, null, record1, 0);
+    var sinkRecord2 = new SinkRecord("topic", 0, null, null, null, record2, 1);
+
+    // When & Then: Should throw exception with sample values from schemaless data
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var exception =
+        assertThrows(
+            RuntimeException.class,
+            () -> converter.convertRecords(Arrays.asList(sinkRecord1, sinkRecord2)));
+
+    // Verify the enhanced error message contains actual sample values
+    var message = exception.getCause().getMessage();
+    assertTrue(message.contains("Sample values:"));
+    assertTrue(message.contains("simple string"));
+    assertTrue(message.contains("data"));
+
     converter.close();
   }
 }

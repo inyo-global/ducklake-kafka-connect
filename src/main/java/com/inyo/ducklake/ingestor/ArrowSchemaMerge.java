@@ -80,6 +80,50 @@ public class ArrowSchemaMerge {
   }
 
   /**
+   * Unifies multiple Arrow schemas into a single schema with sample values for better error
+   * messages.
+   *
+   * @param schemas List of schemas to merge
+   * @param sampleValues Map of field names to sample values that caused conflicts
+   * @return Unified schema containing all fields from input schemas
+   * @throws IllegalArgumentException if schemas cannot be merged due to incompatible types
+   */
+  public static Schema unifySchemasWithSamples(
+      List<Schema> schemas, Map<String, List<Object>> sampleValues) {
+    if (schemas == null || schemas.isEmpty()) {
+      throw new IllegalArgumentException("Schema list cannot be null or empty");
+    }
+
+    if (schemas.size() == 1) {
+      return schemas.get(0);
+    }
+
+    Map<String, List<Field>> fieldsByName = new HashMap<>();
+
+    // Group fields by name across all schemas
+    for (Schema schema : schemas) {
+      for (Field field : schema.getFields()) {
+        fieldsByName.computeIfAbsent(field.getName(), k -> new ArrayList<>()).add(field);
+      }
+    }
+
+    // Merge fields with the same name
+    List<Field> unifiedFields = new ArrayList<>();
+    for (Map.Entry<String, List<Field>> entry : fieldsByName.entrySet()) {
+      String fieldName = entry.getKey();
+      List<Field> fields = entry.getValue();
+
+      Field unifiedField = mergeFieldsWithSamples(fieldName, fields, sampleValues.get(fieldName));
+      unifiedFields.add(unifiedField);
+    }
+
+    // Sort fields by name for consistent ordering
+    unifiedFields.sort(Comparator.comparing(Field::getName));
+
+    return new Schema(unifiedFields);
+  }
+
+  /**
    * Merges multiple fields with the same name into a single field.
    *
    * @param fieldName Name of the field
@@ -110,13 +154,92 @@ public class ArrowSchemaMerge {
       try {
         unifiedType = unifyTypes(new ArrayList<>(types));
       } catch (IllegalArgumentException e) {
+        // Create detailed error message with sample type descriptions
+        var typeDescriptions = new StringBuilder();
+        var typeList = new ArrayList<>(types);
+        for (int i = 0; i < typeList.size(); i++) {
+          var type = typeList.get(i);
+          typeDescriptions.append(type);
+          if (i < typeList.size() - 1) {
+            typeDescriptions.append(", ");
+          }
+        }
+
         throw new IllegalArgumentException(
             "Cannot unify incompatible types for field '"
                 + fieldName
-                + "': "
-                + types
-                + ". Original error: "
+                + "': Found conflicting types ["
+                + typeDescriptions
+                + "]. "
+                + "Original error: "
                 + e.getMessage(),
+            e);
+      }
+    }
+
+    // Merge children for complex types
+    List<Field> unifiedChildren = null;
+    if (isComplexType(unifiedType)) {
+      unifiedChildren = mergeChildren(fields);
+    }
+
+    FieldType unifiedFieldType = new FieldType(isNullable, unifiedType, null);
+    return new Field(fieldName, unifiedFieldType, unifiedChildren);
+  }
+
+  /**
+   * Merges multiple fields with the same name into a single field, using sample values for better
+   * error messages.
+   *
+   * @param fieldName Name of the field
+   * @param fields List of fields to merge
+   * @param sampleValues Sample values for the fields
+   * @return Merged field
+   */
+  private static Field mergeFieldsWithSamples(
+      String fieldName, List<Field> fields, List<Object> sampleValues) {
+    if (fields.size() == 1) {
+      return fields.get(0);
+    }
+
+    // Determine if the merged field should be nullable
+    boolean isNullable = fields.stream().anyMatch(Field::isNullable);
+
+    // Get all unique types
+    Set<ArrowType> types =
+        fields.stream()
+            .map(Field::getFieldType)
+            .map(FieldType::getType)
+            .collect(Collectors.toSet());
+
+    ArrowType unifiedType;
+    if (types.size() == 1) {
+      // All fields have the same type
+      unifiedType = types.iterator().next();
+    } else {
+      // Need to unify different types - pass field name and sample values for better error messages
+      try {
+        unifiedType = unifyTypes(new ArrayList<>(types));
+      } catch (IllegalArgumentException e) {
+        // Create detailed error message with sample type descriptions
+        var typeDescriptions = new StringBuilder();
+        var typeList = new ArrayList<>(types);
+        for (int i = 0; i < typeList.size(); i++) {
+          var type = typeList.get(i);
+          typeDescriptions.append(type);
+          if (i < typeList.size() - 1) {
+            typeDescriptions.append(", ");
+          }
+        }
+
+        throw new IllegalArgumentException(
+            "Cannot unify incompatible types for field '"
+                + fieldName
+                + "': Found conflicting types ["
+                + typeDescriptions
+                + "]. "
+                + "Sample values: "
+                + sampleValues,
             e);
       }
     }
@@ -188,19 +311,13 @@ public class ArrowSchemaMerge {
 
   /** Promotes numeric types to the most general type. */
   private static ArrowType promoteNumericTypes(Set<ArrowType> types) {
-    boolean hasFloatingPoint = types.stream().anyMatch(t -> t instanceof ArrowType.FloatingPoint);
-    boolean hasInt64 =
+    var hasFloatingPoint = types.stream().anyMatch(t -> t instanceof ArrowType.FloatingPoint);
+    var hasInt64 =
         types.stream()
             .anyMatch(
                 t ->
                     t instanceof ArrowType.Int
                         && ((ArrowType.Int) t).getBitWidth() == ArrowTypeConstants.INT64_BIT_WIDTH);
-    boolean hasInt32 =
-        types.stream()
-            .anyMatch(
-                t ->
-                    t instanceof ArrowType.Int
-                        && ((ArrowType.Int) t).getBitWidth() == ArrowTypeConstants.INT32_BIT_WIDTH);
 
     if (hasFloatingPoint) {
       // Check if we have double precision
@@ -221,10 +338,6 @@ public class ArrowSchemaMerge {
 
     if (hasInt64) {
       return new ArrowType.Int(ArrowTypeConstants.INT64_BIT_WIDTH, true);
-    }
-
-    if (hasInt32) {
-      return new ArrowType.Int(ArrowTypeConstants.INT32_BIT_WIDTH, true);
     }
 
     // Default to int32 for smaller integer types
