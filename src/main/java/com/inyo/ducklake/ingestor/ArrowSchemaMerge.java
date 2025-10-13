@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import org.apache.arrow.vector.types.FloatingPointPrecision;
 import org.apache.arrow.vector.types.pojo.ArrowType;
@@ -38,14 +39,17 @@ import org.apache.arrow.vector.types.pojo.Schema;
 public class ArrowSchemaMerge {
 
   /**
-   * Unifies multiple Arrow schemas into a single schema. Fields with the same name are merged, and
-   * type conflicts are resolved.
+   * Unifies multiple Arrow schemas into a single schema. When unification fails, sample values are
+   * collected to provide better error messages.
    *
    * @param schemas List of schemas to merge
+   * @param sampleValuesSupplier Supplier for sample values (called only when needed for error
+   *     messages)
    * @return Unified schema containing all fields from input schemas
    * @throws IllegalArgumentException if schemas cannot be merged due to incompatible types
    */
-  public static Schema unifySchemas(List<Schema> schemas) {
+  public static Schema unifySchemas(
+      List<Schema> schemas, Supplier<Map<String, List<Object>>> sampleValuesSupplier) {
     if (schemas == null || schemas.isEmpty()) {
       throw new IllegalArgumentException("Schema list cannot be null or empty");
     }
@@ -69,52 +73,17 @@ public class ArrowSchemaMerge {
       String fieldName = entry.getKey();
       List<Field> fields = entry.getValue();
 
-      Field unifiedField = mergeFields(fieldName, fields);
-      unifiedFields.add(unifiedField);
-    }
+      try {
+        Field unifiedField = mergeFields(fieldName, fields);
+        unifiedFields.add(unifiedField);
+      } catch (IllegalArgumentException e) {
+        // Collect sample values for better error message
+        var sampleValues = sampleValuesSupplier.get();
+        var fieldSamples = sampleValues.get(fieldName);
 
-    // Sort fields by name for consistent ordering
-    unifiedFields.sort(Comparator.comparing(Field::getName));
-
-    return new Schema(unifiedFields);
-  }
-
-  /**
-   * Unifies multiple Arrow schemas into a single schema with sample values for better error
-   * messages.
-   *
-   * @param schemas List of schemas to merge
-   * @param sampleValues Map of field names to sample values that caused conflicts
-   * @return Unified schema containing all fields from input schemas
-   * @throws IllegalArgumentException if schemas cannot be merged due to incompatible types
-   */
-  public static Schema unifySchemasWithSamples(
-      List<Schema> schemas, Map<String, List<Object>> sampleValues) {
-    if (schemas == null || schemas.isEmpty()) {
-      throw new IllegalArgumentException("Schema list cannot be null or empty");
-    }
-
-    if (schemas.size() == 1) {
-      return schemas.get(0);
-    }
-
-    Map<String, List<Field>> fieldsByName = new HashMap<>();
-
-    // Group fields by name across all schemas
-    for (Schema schema : schemas) {
-      for (Field field : schema.getFields()) {
-        fieldsByName.computeIfAbsent(field.getName(), k -> new ArrayList<>()).add(field);
+        // Enhance the original error message with sample values
+        throw new IllegalArgumentException(e.getMessage() + " Sample values: " + fieldSamples, e);
       }
-    }
-
-    // Merge fields with the same name
-    List<Field> unifiedFields = new ArrayList<>();
-    for (Map.Entry<String, List<Field>> entry : fieldsByName.entrySet()) {
-      String fieldName = entry.getKey();
-      List<Field> fields = entry.getValue();
-
-      Field unifiedField = mergeFieldsWithSamples(fieldName, fields, sampleValues.get(fieldName));
-      unifiedFields.add(unifiedField);
     }
 
     // Sort fields by name for consistent ordering
@@ -173,73 +142,6 @@ public class ArrowSchemaMerge {
                 + "]. "
                 + "Original error: "
                 + e.getMessage(),
-            e);
-      }
-    }
-
-    // Merge children for complex types
-    List<Field> unifiedChildren = null;
-    if (isComplexType(unifiedType)) {
-      unifiedChildren = mergeChildren(fields);
-    }
-
-    FieldType unifiedFieldType = new FieldType(isNullable, unifiedType, null);
-    return new Field(fieldName, unifiedFieldType, unifiedChildren);
-  }
-
-  /**
-   * Merges multiple fields with the same name into a single field, using sample values for better
-   * error messages.
-   *
-   * @param fieldName Name of the field
-   * @param fields List of fields to merge
-   * @param sampleValues Sample values for the fields
-   * @return Merged field
-   */
-  private static Field mergeFieldsWithSamples(
-      String fieldName, List<Field> fields, List<Object> sampleValues) {
-    if (fields.size() == 1) {
-      return fields.get(0);
-    }
-
-    // Determine if the merged field should be nullable
-    boolean isNullable = fields.stream().anyMatch(Field::isNullable);
-
-    // Get all unique types
-    Set<ArrowType> types =
-        fields.stream()
-            .map(Field::getFieldType)
-            .map(FieldType::getType)
-            .collect(Collectors.toSet());
-
-    ArrowType unifiedType;
-    if (types.size() == 1) {
-      // All fields have the same type
-      unifiedType = types.iterator().next();
-    } else {
-      // Need to unify different types - pass field name and sample values for better error messages
-      try {
-        unifiedType = unifyTypes(new ArrayList<>(types));
-      } catch (IllegalArgumentException e) {
-        // Create detailed error message with sample type descriptions
-        var typeDescriptions = new StringBuilder();
-        var typeList = new ArrayList<>(types);
-        for (int i = 0; i < typeList.size(); i++) {
-          var type = typeList.get(i);
-          typeDescriptions.append(type);
-          if (i < typeList.size() - 1) {
-            typeDescriptions.append(", ");
-          }
-        }
-
-        throw new IllegalArgumentException(
-            "Cannot unify incompatible types for field '"
-                + fieldName
-                + "': Found conflicting types ["
-                + typeDescriptions
-                + "]. "
-                + "Sample values: "
-                + sampleValues,
             e);
       }
     }
@@ -446,22 +348,6 @@ public class ArrowSchemaMerge {
                     || t instanceof ArrowType.Time
                     || t instanceof ArrowType.Date
                     || t instanceof ArrowType.Utf8); // Allow string as compatible with timestamp
-  }
-
-  /**
-   * Checks if two schemas are compatible (can be merged without data loss).
-   *
-   * @param schema1 First schema
-   * @param schema2 Second schema
-   * @return true if schemas are compatible
-   */
-  public static boolean areCompatible(Schema schema1, Schema schema2) {
-    try {
-      unifySchemas(Arrays.asList(schema1, schema2));
-      return true;
-    } catch (IllegalArgumentException e) {
-      return false;
-    }
   }
 
   /**
