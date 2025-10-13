@@ -106,8 +106,19 @@ public class ArrowSchemaMerge {
       // All fields have the same type
       unifiedType = types.iterator().next();
     } else {
-      // Need to unify different types
-      unifiedType = unifyTypes(new ArrayList<>(types));
+      // Need to unify different types - pass field name for better error messages
+      try {
+        unifiedType = unifyTypes(new ArrayList<>(types));
+      } catch (IllegalArgumentException e) {
+        throw new IllegalArgumentException(
+            "Cannot unify incompatible types for field '"
+                + fieldName
+                + "': "
+                + types
+                + ". Original error: "
+                + e.getMessage(),
+            e);
+      }
     }
 
     // Merge children for complex types
