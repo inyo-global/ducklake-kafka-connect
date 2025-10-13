@@ -263,14 +263,10 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
     }
 
     // Collect sample values for each field to help with error messages
-    Map<String, List<Object>> sampleValues = collectSampleValues(records);
+    var sampleValues = collectSampleValues(records);
 
-    try {
-      return ArrowSchemaMerge.unifySchemas(arrowSchemas);
-    } catch (IllegalArgumentException e) {
-      // If basic unification fails, try with sample values for better error messages
-      return ArrowSchemaMerge.unifySchemasWithSamples(arrowSchemas, sampleValues);
-    }
+    // Always use unifySchemasWithSamples to ensure sample values are included in error messages
+    return ArrowSchemaMerge.unifySchemasWithSamples(arrowSchemas, sampleValues);
   }
 
   /**
