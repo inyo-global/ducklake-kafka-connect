@@ -637,4 +637,227 @@ class SinkRecordToArrowConverterTest {
 
     converter.close();
   }
+
+  @Test
+  @DisplayName("Handles null values in schema inference without type conflicts")
+  void testNullValueHandlingInSchemaInference() {
+    // Given: Records with mixed null and non-null complex fields using same schema structure
+    var addressSchema =
+        SchemaBuilder.struct()
+            .field("id", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .field("street", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .field("city", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .field("zipcode", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .optional()
+            .build();
+
+    var personSchema =
+        SchemaBuilder.struct()
+            .field("id", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .field("firstName", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .field("lastName", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .optional()
+            .build();
+
+    var recordSchema =
+        SchemaBuilder.struct()
+            .field("recordId", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .field("person", personSchema)
+            .field("address", addressSchema) // Both records use same structured schema
+            .optional()
+            .build();
+
+    // Record 1: With populated address
+    var addressStruct =
+        new Struct(addressSchema)
+            .put("id", "addr-123")
+            .put("street", "123 Main St")
+            .put("city", "Springfield")
+            .put("zipcode", "12345");
+
+    var personStruct =
+        new Struct(personSchema)
+            .put("id", "person-123")
+            .put("firstName", "John")
+            .put("lastName", "Doe");
+
+    var record1Value =
+        new Struct(recordSchema)
+            .put("recordId", "record-1")
+            .put("person", personStruct)
+            .put("address", addressStruct);
+
+    // Record 2: With null address (same schema structure)
+    var personStruct2 =
+        new Struct(personSchema)
+            .put("id", "person-456")
+            .put("firstName", "Jane")
+            .put("lastName", "Smith");
+
+    var record2Value =
+        new Struct(recordSchema)
+            .put("recordId", "record-2")
+            .put("person", personStruct2)
+            .put("address", null); // NULL address but same schema
+
+    // When
+    var record1 = new SinkRecord("test-topic", 0, null, "key1", recordSchema, record1Value, 1);
+    var record2 = new SinkRecord("test-topic", 0, null, "key2", recordSchema, record2Value, 2);
+    var records = Arrays.asList(record1, record2);
+
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var root = converter.convertRecords(records);
+
+    // Then
+    assertEquals(2, root.getRowCount());
+
+    // Verify all expected fields are present
+    var idVec = (VarCharVector) root.getVector("recordId");
+    var personVec = (StructVector) root.getVector("person");
+    var addressVec = (StructVector) root.getVector("address");
+
+    // Check first record
+    assertEquals("record-1", new String(idVec.get(0), StandardCharsets.UTF_8));
+    assertFalse(personVec.isNull(0));
+    assertFalse(addressVec.isNull(0));
+
+    // Check second record (with null address)
+    assertEquals("record-2", new String(idVec.get(1), StandardCharsets.UTF_8));
+    assertFalse(personVec.isNull(1));
+    assertTrue(addressVec.isNull(1)); // Address should be null
+
+    root.close();
+    converter.close();
+  }
+
+  @Test
+  @DisplayName("Handles schema inference from maps with null values correctly")
+  void testSchemaInferenceFromMapsWithNullValues() {
+    // Given: Schemaless records (maps) with null values that should not be inferred as strings
+    var record1Map = new LinkedHashMap<String, Object>();
+    record1Map.put("id", "record-123");
+    record1Map.put("name", "Test Record");
+    record1Map.put("count", 42);
+    record1Map.put("active", true);
+    record1Map.put("metadata", null); // This should not cause type conflicts
+
+    var record2Map = new LinkedHashMap<String, Object>();
+    record2Map.put("id", "record-456");
+    record2Map.put("name", null); // Different field is null
+    record2Map.put("count", 84);
+    record2Map.put("active", false);
+    record2Map.put("metadata", "actual metadata");
+
+    // When
+    var record1 = new SinkRecord("test-topic", 0, null, "key1", null, record1Map, 1);
+    var record2 = new SinkRecord("test-topic", 0, null, "key2", null, record2Map, 2);
+    var records = Arrays.asList(record1, record2);
+
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var root = converter.convertRecords(records);
+
+    // Then: Should successfully convert without type conflicts
+    assertEquals(2, root.getRowCount());
+
+    // Verify inferred schema includes fields with actual types
+    var idVec = (VarCharVector) root.getVector("id");
+    var countVec = (IntVector) root.getVector("count");
+    var metadataVec = (VarCharVector) root.getVector("metadata");
+
+    assertEquals("record-123", new String(idVec.get(0), StandardCharsets.UTF_8));
+    assertEquals(42, countVec.get(0));
+    assertEquals("record-456", new String(idVec.get(1), StandardCharsets.UTF_8));
+    assertEquals(84, countVec.get(1));
+    assertEquals("actual metadata", new String(metadataVec.get(1), StandardCharsets.UTF_8));
+
+    root.close();
+    converter.close();
+  }
+
+  @Test
+  @DisplayName("Handles nested structures with mixed null values")
+  void testNestedStructuresWithMixedNullValues() {
+    // Given: Nested schema with mixed null and non-null values
+    var contactSchema =
+        SchemaBuilder.struct()
+            .field("email", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .field("phone", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .optional()
+            .build();
+
+    var companySchema =
+        SchemaBuilder.struct()
+            .field("name", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .field("contact", contactSchema)
+            .optional()
+            .build();
+
+    var employeeSchema =
+        SchemaBuilder.struct()
+            .field("id", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .field("name", org.apache.kafka.connect.data.Schema.OPTIONAL_STRING_SCHEMA)
+            .field("company", companySchema)
+            .optional()
+            .build();
+
+    // Record 1: Full structure
+    var contactStruct1 =
+        new Struct(contactSchema).put("email", "contact@acme.com").put("phone", "555-0123");
+    var companyStruct1 =
+        new Struct(companySchema).put("name", "ACME Corp").put("contact", contactStruct1);
+    var employee1 =
+        new Struct(employeeSchema)
+            .put("id", "emp-001")
+            .put("name", "Alice Johnson")
+            .put("company", companyStruct1);
+
+    // Record 2: Null company
+    var employee2 =
+        new Struct(employeeSchema)
+            .put("id", "emp-002")
+            .put("name", "Bob Smith")
+            .put("company", null);
+
+    // Record 3: Company with null contact
+    var companyStruct3 = new Struct(companySchema).put("name", "XYZ Ltd").put("contact", null);
+    var employee3 =
+        new Struct(employeeSchema)
+            .put("id", "emp-003")
+            .put("name", "Charlie Brown")
+            .put("company", companyStruct3);
+
+    // When
+    var record1 = new SinkRecord("employees", 0, null, "key1", employeeSchema, employee1, 1);
+    var record2 = new SinkRecord("employees", 0, null, "key2", employeeSchema, employee2, 2);
+    var record3 = new SinkRecord("employees", 0, null, "key3", employeeSchema, employee3, 3);
+    var records = Arrays.asList(record1, record2, record3);
+
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var root = converter.convertRecords(records);
+
+    // Then: Should handle mixed null/non-null nested structures
+    assertEquals(3, root.getRowCount());
+
+    var idVec = (VarCharVector) root.getVector("id");
+    var nameVec = (VarCharVector) root.getVector("name");
+    var companyVec = (StructVector) root.getVector("company");
+
+    // Verify first record (full structure)
+    assertEquals("emp-001", new String(idVec.get(0), StandardCharsets.UTF_8));
+    assertEquals("Alice Johnson", new String(nameVec.get(0), StandardCharsets.UTF_8));
+    assertFalse(companyVec.isNull(0));
+
+    // Verify second record (null company)
+    assertEquals("emp-002", new String(idVec.get(1), StandardCharsets.UTF_8));
+    assertEquals("Bob Smith", new String(nameVec.get(1), StandardCharsets.UTF_8));
+    assertTrue(companyVec.isNull(1));
+
+    // Verify third record (company with null contact)
+    assertEquals("emp-003", new String(idVec.get(2), StandardCharsets.UTF_8));
+    assertEquals("Charlie Brown", new String(nameVec.get(2), StandardCharsets.UTF_8));
+    assertFalse(companyVec.isNull(2));
+
+    root.close();
+    converter.close();
+  }
 }

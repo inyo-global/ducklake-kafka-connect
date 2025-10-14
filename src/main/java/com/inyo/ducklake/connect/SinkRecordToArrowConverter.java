@@ -126,15 +126,18 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
 
                     if (val instanceof Map<?, ?> mapVal) {
                       org.apache.kafka.connect.data.Schema inferred = inferSchemaFromObject(mapVal);
-                      Struct struct = buildStructFromMap(mapVal, inferred);
-                      return new SinkRecord(
-                          r1.topic(),
-                          r1.kafkaPartition(),
-                          r1.keySchema(),
-                          r1.key(),
-                          inferred,
-                          struct,
-                          r1.kafkaOffset());
+                      // Only create struct if we successfully inferred a schema (non-null result)
+                      if (inferred != null) {
+                        Struct struct = buildStructFromMap(mapVal, inferred);
+                        return new SinkRecord(
+                            r1.topic(),
+                            r1.kafkaPartition(),
+                            r1.keySchema(),
+                            r1.key(),
+                            inferred,
+                            struct,
+                            r1.kafkaOffset());
+                      }
                     }
                     return r1;
                   })
@@ -664,7 +667,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
   // Infer a Kafka Connect schema for a given example object (Maps -> STRUCT, Collections -> ARRAY)
   private org.apache.kafka.connect.data.Schema inferSchemaFromObject(Object example) {
     if (example == null) {
-      return SchemaBuilder.string().optional().build();
+      // Don't infer schema from null values - return null to indicate no type information
+      return null;
     }
     if (example instanceof Map<?, ?> map) {
       SchemaBuilder sb = org.apache.kafka.connect.data.SchemaBuilder.struct();
@@ -672,20 +676,29 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
         String name = String.valueOf(e.getKey());
         Object v = e.getValue();
         org.apache.kafka.connect.data.Schema childSchema = inferSchemaFromObject(v);
-        sb.field(name, childSchema);
+        // Only add fields where we can determine the schema from non-null values
+        if (childSchema != null) {
+          sb.field(name, childSchema);
+        }
       }
       return sb.build();
     }
     if (example instanceof Collection<?> coll) {
-      org.apache.kafka.connect.data.Schema elemSchema =
-          org.apache.kafka.connect.data.SchemaBuilder.string().optional().build();
+      org.apache.kafka.connect.data.Schema elemSchema = null;
       for (Object o : coll) {
         if (o != null) {
           elemSchema = inferSchemaFromObject(o);
-          break;
+          if (elemSchema != null) {
+            break;
+          }
         }
       }
-      return org.apache.kafka.connect.data.SchemaBuilder.array(elemSchema).build();
+      // Only create array schema if we found a non-null element type
+      if (elemSchema != null) {
+        return org.apache.kafka.connect.data.SchemaBuilder.array(elemSchema).build();
+      }
+      // If all elements are null, we can't determine the array element type
+      return null;
     }
     if (example instanceof Integer) return org.apache.kafka.connect.data.Schema.INT32_SCHEMA;
     if (example instanceof Long) return org.apache.kafka.connect.data.Schema.INT64_SCHEMA;
