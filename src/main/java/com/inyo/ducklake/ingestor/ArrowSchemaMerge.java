@@ -293,12 +293,75 @@ public class ArrowSchemaMerge {
     for (Map.Entry<String, List<Field>> entry : childrenByName.entrySet()) {
       String childName = entry.getKey();
       List<Field> children = entry.getValue();
-      Field mergedChild = mergeFields(childName, children);
-      mergedChildren.add(mergedChild);
+
+      // Check if all children are structurally identical before attempting merge
+      if (areFieldsStructurallyIdentical(children)) {
+        // If they are identical, just use the first one
+        mergedChildren.add(children.get(0));
+      } else {
+        // Otherwise, proceed with normal merge
+        Field mergedChild = mergeFields(childName, children);
+        mergedChildren.add(mergedChild);
+      }
     }
 
     mergedChildren.sort(Comparator.comparing(Field::getName));
     return mergedChildren;
+  }
+
+  /**
+   * Checks if all fields in the list are structurally identical. Two fields are structurally
+   * identical if they have the same name, type, nullability, and identical children (recursively).
+   */
+  private static boolean areFieldsStructurallyIdentical(List<Field> fields) {
+    if (fields.size() <= 1) {
+      return true;
+    }
+
+    Field first = fields.get(0);
+    for (int i = 1; i < fields.size(); i++) {
+      if (!areFieldsEqual(first, fields.get(i))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** Compares two fields for structural equality. */
+  private static boolean areFieldsEqual(Field field1, Field field2) {
+    // Check basic properties
+    if (!field1.getName().equals(field2.getName())
+        || !field1.getFieldType().getType().equals(field2.getFieldType().getType())
+        || field1.isNullable() != field2.isNullable()) {
+      return false;
+    }
+
+    // Check children
+    var children1 = field1.getChildren();
+    var children2 = field2.getChildren();
+
+    if (children1 == null && children2 == null) {
+      return true;
+    }
+
+    if (children1 == null || children2 == null || children1.size() != children2.size()) {
+      return false;
+    }
+
+    // Sort children by name for comparison
+    var sortedChildren1 = new ArrayList<>(children1);
+    var sortedChildren2 = new ArrayList<>(children2);
+    sortedChildren1.sort(Comparator.comparing(Field::getName));
+    sortedChildren2.sort(Comparator.comparing(Field::getName));
+
+    // Recursively compare children
+    for (int i = 0; i < sortedChildren1.size(); i++) {
+      if (!areFieldsEqual(sortedChildren1.get(i), sortedChildren2.get(i))) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   // Type checking helper methods
