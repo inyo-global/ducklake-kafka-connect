@@ -754,7 +754,21 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
         case STRUCT -> struct.put(f.name(), buildStructFromMap((Map<?, ?>) raw, f.schema()));
         case ARRAY -> {
           if (raw instanceof Collection<?> coll) {
-            struct.put(f.name(), coll);
+            var elementSchema = f.schema().valueSchema();
+            if (elementSchema.type() == org.apache.kafka.connect.data.Schema.Type.STRUCT) {
+              // Convert Map elements to Structs if array contains struct elements
+              var convertedList = new ArrayList<>();
+              for (var element : coll) {
+                if (element instanceof Map<?, ?> mapElement) {
+                  convertedList.add(buildStructFromMap(mapElement, elementSchema));
+                } else {
+                  convertedList.add(element);
+                }
+              }
+              struct.put(f.name(), convertedList);
+            } else {
+              struct.put(f.name(), coll);
+            }
           } else {
             struct.put(f.name(), null);
           }

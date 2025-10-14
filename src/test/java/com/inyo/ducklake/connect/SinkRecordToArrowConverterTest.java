@@ -17,6 +17,7 @@ package com.inyo.ducklake.connect;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -859,5 +860,201 @@ class SinkRecordToArrowConverterTest {
 
     root.close();
     converter.close();
+  }
+
+  @Test
+  @DisplayName(
+      "Converts arrays containing Maps to arrays of Structs when schema expects Struct elements")
+  void testArrayWithMapElementsConvertedToStructs() {
+    // Given: JSON data with an array containing Map objects (typical from JSON parsing)
+    var jsonPayload =
+        """
+        {
+          "id": "31c68ce2-eb6b-440c-adca-73979bf2d65f",
+          "amount": "50.38",
+          "product": "BILLPAY",
+          "validationErrors": [
+            {
+              "field": "amount",
+              "message": "Amount must be positive",
+              "code": "INVALID_AMOUNT"
+            },
+            {
+              "field": "client.person.firstName",
+              "message": "First name is required",
+              "code": "REQUIRED_FIELD"
+            }
+          ]
+        }
+        """;
+
+    var objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    Map<String, Object> valueMap;
+    try {
+      valueMap =
+          objectMapper.readValue(
+              jsonPayload, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+
+    // When: Converting schemaless JSON data (simulates real-world Kafka Connect scenario)
+    var sinkRecord = new SinkRecord("test-topic", 0, null, "test-key", null, valueMap, 1L);
+    var records = List.of(sinkRecord);
+
+    try (var allocator = new RootAllocator();
+        var converter = new SinkRecordToArrowConverter(allocator)) {
+
+      // Then: Should successfully convert without throwing DataException
+      var result = converter.convertRecords(records);
+
+      // Verify the conversion completed successfully
+      assertEquals(EXPECTED_ROW_COUNT, result.getRowCount());
+
+      // Verify the validationErrors field was converted properly
+      ListVector validationErrorsVector = (ListVector) result.getVector("validationErrors");
+      assertEquals(2, validationErrorsVector.getInnerValueCountAt(FIRST_ELEMENT_INDEX));
+
+      // Verify the array elements are now Structs with proper fields
+      StructVector dataVector = (StructVector) validationErrorsVector.getDataVector();
+      VarCharVector fieldVector = (VarCharVector) dataVector.getChild("field");
+      VarCharVector messageVector = (VarCharVector) dataVector.getChild("message");
+      VarCharVector codeVector = (VarCharVector) dataVector.getChild("code");
+
+      // Check first validation error
+      assertEquals(
+          "amount", new String(fieldVector.get(FIRST_ELEMENT_INDEX), StandardCharsets.UTF_8));
+      assertEquals(
+          "Amount must be positive",
+          new String(messageVector.get(FIRST_ELEMENT_INDEX), StandardCharsets.UTF_8));
+      assertEquals(
+          "INVALID_AMOUNT",
+          new String(codeVector.get(FIRST_ELEMENT_INDEX), StandardCharsets.UTF_8));
+
+      // Check second validation error
+      assertEquals(
+          "client.person.firstName",
+          new String(fieldVector.get(SECOND_ELEMENT_INDEX), StandardCharsets.UTF_8));
+      assertEquals(
+          "First name is required",
+          new String(messageVector.get(SECOND_ELEMENT_INDEX), StandardCharsets.UTF_8));
+      assertEquals(
+          "REQUIRED_FIELD",
+          new String(codeVector.get(SECOND_ELEMENT_INDEX), StandardCharsets.UTF_8));
+
+      result.close();
+    }
+  }
+
+  @Test
+  @DisplayName("Handles empty arrays with Struct element schema")
+  void testEmptyArrayWithStructElementSchema() {
+    // Given: JSON data with an empty validationErrors array
+    var jsonPayload =
+        """
+        {
+          "id": "test-id",
+          "amount": "25.00",
+          "validationErrors": []
+        }
+        """;
+
+    var objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    Map<String, Object> valueMap;
+    try {
+      valueMap =
+          objectMapper.readValue(
+              jsonPayload, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+
+    // When: Converting schemaless JSON data with empty array
+    var sinkRecord = new SinkRecord("test-topic", 0, null, "test-key", null, valueMap, 1L);
+    var records = List.of(sinkRecord);
+
+    try (var allocator = new RootAllocator();
+        var converter = new SinkRecordToArrowConverter(allocator)) {
+
+      // Then: Should successfully convert empty array
+      var result = converter.convertRecords(records);
+
+      assertEquals(EXPECTED_ROW_COUNT, result.getRowCount());
+
+      // Verify the conversion completed successfully - for empty arrays, the field might not be
+      // created
+      // or might be inferred as a different type since there are no elements to determine the
+      // structure
+      var schema = result.getSchema();
+      assertNotNull(schema);
+
+      // The key point is that conversion succeeds without throwing an exception
+      result.close();
+    }
+  }
+
+  @Test
+  @DisplayName("Converts mixed records with different array content")
+  void testMixedRecordsWithDifferentArrayContent() {
+    // Given: Multiple records with different validationErrors content
+    var jsonPayload1 =
+        """
+        {
+          "id": "record1",
+          "validationErrors": [
+            {"field": "amount", "message": "Amount error", "code": "ERROR_1"}
+          ]
+        }
+        """;
+
+    var jsonPayload2 =
+        """
+        {
+          "id": "record2",
+          "validationErrors": []
+        }
+        """;
+
+    var objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    Map<String, Object> valueMap1;
+    Map<String, Object> valueMap2;
+    try {
+      valueMap1 =
+          objectMapper.readValue(
+              jsonPayload1, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+      valueMap2 =
+          objectMapper.readValue(
+              jsonPayload2, new com.fasterxml.jackson.core.type.TypeReference<>() {});
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+
+    // When: Converting multiple records with different array contents
+    var records =
+        List.of(
+            new SinkRecord("test-topic", 0, null, "key1", null, valueMap1, 1L),
+            new SinkRecord("test-topic", 0, null, "key2", null, valueMap2, 2L));
+
+    try (var allocator = new RootAllocator();
+        var converter = new SinkRecordToArrowConverter(allocator)) {
+
+      // Then: Should successfully convert all records with unified schema
+      var result = converter.convertRecords(records);
+
+      assertEquals(2, result.getRowCount());
+
+      // Verify unified schema handles both populated and empty arrays
+      ListVector validationErrorsVector = (ListVector) result.getVector("validationErrors");
+      assertEquals(
+          1,
+          validationErrorsVector.getInnerValueCountAt(
+              FIRST_ELEMENT_INDEX)); // First record has 1 error
+      assertEquals(
+          0,
+          validationErrorsVector.getInnerValueCountAt(
+              SECOND_ELEMENT_INDEX)); // Second record has 0 errors
+
+      result.close();
+    }
   }
 }
