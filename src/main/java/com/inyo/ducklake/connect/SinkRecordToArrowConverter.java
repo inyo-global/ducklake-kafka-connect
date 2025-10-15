@@ -188,10 +188,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
           vectorSchemaRoot = convertRecords(partitionRecords);
           result.put(partition, vectorSchemaRoot);
 
-          LOG.debug(
-              "Converted partition {} with {} records",
-              partition,
-              partitionRecords.size());
+          LOG.debug("Converted partition {} with {} records", partition, partitionRecords.size());
         } catch (Exception e) {
           // Ensure cleanup if conversion fails
           if (vectorSchemaRoot != null) {
@@ -204,9 +201,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
                   closeException.getMessage());
             }
           }
-          LOG.error(
-              "Failed to convert records for partition: " + partition,
-              e);
+          LOG.error("Failed to convert records for partition: " + partition, e);
           throw new RuntimeException("Failed to convert partition records: " + partition, e);
         }
       }
@@ -348,9 +343,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       // Only check capacity if we have field vectors
       if (!root.getFieldVectors().isEmpty()
           && rowIndex >= root.getFieldVectors().get(0).getValueCapacity()) {
-        LOG.info(
-            "Reallocating vectors due to capacity exceeded at row: {}",
-            rowIndex);
+        LOG.info("Reallocating vectors due to capacity exceeded at row: {}", rowIndex);
 
         for (FieldVector vector : root.getFieldVectors()) {
           vector.reAlloc();
@@ -485,9 +478,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
           timestampVector.set(index, dateValue.getTime());
           return;
         } else {
-          LOG.warn(
-              "Unsupported value type for timestamp: {}",
-              value.getClass());
+          LOG.warn("Unsupported value type for timestamp: {}", value.getClass());
           vector.setNull(index);
           return;
         }
@@ -524,23 +515,17 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
             long epochMillis = TimestampUtils.parseTimestampToEpochMillis(stringValue);
             ((TimeStampMilliVector) vector).set(index, epochMillis);
           } catch (Exception e) {
-            LOG.warn(
-                "Failed to parse timestamp string in STRING case: {}",
-                stringValue);
+            LOG.warn("Failed to parse timestamp string in STRING case: {}", stringValue);
             vector.setNull(index);
           }
         } else if (vector instanceof TimeStampMilliVector) {
           // Vector is timestamp but value is not a valid timestamp string, set to null
-          LOG.warn(
-              "Cannot set non-timestamp value to timestamp vector: {}",
-              value);
+          LOG.warn("Cannot set non-timestamp value to timestamp vector: {}", value);
           vector.setNull(index);
         } else if (vector instanceof VarCharVector) {
           ((VarCharVector) vector).set(index, value.toString().getBytes(StandardCharsets.UTF_8));
         } else {
-          LOG.warn(
-              "Unexpected vector type for STRING: {}",
-              vector.getClass());
+          LOG.warn("Unexpected vector type for STRING: {}", vector.getClass());
           vector.setNull(index);
         }
       }
@@ -548,9 +533,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
         if (value instanceof byte[] bytes) {
           ((VarBinaryVector) vector).set(index, bytes);
         } else {
-          LOG.warn(
-              "Expected byte[] for BYTES type, got: {}",
-              value.getClass());
+          LOG.warn("Expected byte[] for BYTES type, got: {}", value.getClass());
           vector.setNull(index);
         }
       }
@@ -714,10 +697,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
             struct.put(f.name(), new Date(epochMillis));
             continue; // Skip the switch statement
           } catch (Exception e) {
-            LOG.warn(
-                "Failed to convert timestamp string for field {}: {}",
-                f.name(),
-                stringValue);
+            LOG.warn("Failed to convert timestamp string for field {}: {}", f.name(), stringValue);
             struct.put(f.name(), null);
             continue; // Skip the switch statement
           }
