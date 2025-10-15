@@ -28,6 +28,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+
+import com.inyo.ducklake.ingestor.DucklakeWriter;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.BaseVariableWidthVector;
 import org.apache.arrow.vector.BigIntVector;
@@ -52,14 +54,15 @@ import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.data.Timestamp;
 import org.apache.kafka.connect.sink.SinkRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Converts Kafka SinkRecords to Arrow VectorSchemaRoot with unified schema. Handles schema
  * unification, type conversion, and data population.
  */
 public final class SinkRecordToArrowConverter implements AutoCloseable {
-  private static final System.Logger LOG =
-      System.getLogger(SinkRecordToArrowConverter.class.getName());
+  private static final Logger LOG = LoggerFactory.getLogger(SinkRecordToArrowConverter.class);
 
   private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
 
@@ -81,8 +84,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
     try {
       allocator.close();
     } catch (Exception e) {
-      LOG.log(
-          System.Logger.Level.WARNING, "Failed to close converter allocator: {0}", e.getMessage());
+      LOG.warn("Failed to close converter allocator: {}", e.getMessage());
     }
   }
 
@@ -155,15 +157,14 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       populateVectors(vectorSchemaRoot, records, unifiedSchema);
       vectorSchemaRoot.setRowCount(records.size());
 
-      LOG.log(
-          System.Logger.Level.DEBUG,
-          "Converted {0} records to VectorSchemaRoot with unified schema: {1}",
+      LOG.debug(
+          "Converted {} records to VectorSchemaRoot with unified schema: {}",
           records.size(),
           unifiedSchema);
 
       return vectorSchemaRoot;
     } catch (Exception e) {
-      LOG.log(System.Logger.Level.ERROR, "Error converting records to Arrow format", e);
+      LOG.error("Error converting records to Arrow format", e);
       throw new RuntimeException("Failed to convert SinkRecords to VectorSchemaRoot", e);
     }
   }
@@ -189,9 +190,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
           vectorSchemaRoot = convertRecords(partitionRecords);
           result.put(partition, vectorSchemaRoot);
 
-          LOG.log(
-              System.Logger.Level.DEBUG,
-              "Converted partition {0} with {1} records",
+          LOG.debug(
+              "Converted partition {} with {} records",
               partition,
               partitionRecords.size());
         } catch (Exception e) {
@@ -200,15 +200,13 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
             try {
               vectorSchemaRoot.close();
             } catch (Exception closeException) {
-              LOG.log(
-                  System.Logger.Level.WARNING,
-                  "Failed to close VectorSchemaRoot during exception cleanup for partition {0}: {1}",
+              LOG.warn(
+                  "Failed to close VectorSchemaRoot during exception cleanup for partition {}: {}",
                   partition,
                   closeException.getMessage());
             }
           }
-          LOG.log(
-              System.Logger.Level.ERROR,
+          LOG.error(
               "Failed to convert records for partition: " + partition,
               e);
           throw new RuntimeException("Failed to convert partition records: " + partition, e);
@@ -352,9 +350,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       // Only check capacity if we have field vectors
       if (!root.getFieldVectors().isEmpty()
           && rowIndex >= root.getFieldVectors().get(0).getValueCapacity()) {
-        LOG.log(
-            System.Logger.Level.INFO,
-            "Reallocating vectors due to capacity exceeded at row: {0}",
+        LOG.info(
+            "Reallocating vectors due to capacity exceeded at row: {}",
             rowIndex);
 
         for (FieldVector vector : root.getFieldVectors()) {
@@ -365,9 +362,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       if (record.value() instanceof Struct) {
         populateStructData(vectorMap, (Struct) record.value(), rowIndex);
       } else {
-        LOG.log(
-            System.Logger.Level.WARNING,
-            "Unsupported record value type at row {0}: {1}",
+        LOG.warn(
+            "Unsupported record value type at row {}: {}",
             rowIndex,
             record.value() != null ? record.value().getClass() : "null");
 
@@ -482,8 +478,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
             timestampVector.set(index, epochMillis);
             return;
           } catch (Exception e) {
-            LOG.log(
-                System.Logger.Level.WARNING, "Failed to parse timestamp string: {0}", stringValue);
+            LOG.warn("Failed to parse timestamp string: {}", stringValue);
             vector.setNull(index);
             return;
           }
@@ -492,9 +487,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
           timestampVector.set(index, dateValue.getTime());
           return;
         } else {
-          LOG.log(
-              System.Logger.Level.WARNING,
-              "Unsupported value type for timestamp: {0}",
+          LOG.warn(
+              "Unsupported value type for timestamp: {}",
               value.getClass());
           vector.setNull(index);
           return;
@@ -532,25 +526,22 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
             long epochMillis = TimestampUtils.parseTimestampToEpochMillis(stringValue);
             ((TimeStampMilliVector) vector).set(index, epochMillis);
           } catch (Exception e) {
-            LOG.log(
-                System.Logger.Level.WARNING,
-                "Failed to parse timestamp string in STRING case: {0}",
+            LOG.warn(
+                "Failed to parse timestamp string in STRING case: {}",
                 stringValue);
             vector.setNull(index);
           }
         } else if (vector instanceof TimeStampMilliVector) {
           // Vector is timestamp but value is not a valid timestamp string, set to null
-          LOG.log(
-              System.Logger.Level.WARNING,
-              "Cannot set non-timestamp value to timestamp vector: {0}",
+          LOG.warn(
+              "Cannot set non-timestamp value to timestamp vector: {}",
               value);
           vector.setNull(index);
         } else if (vector instanceof VarCharVector) {
           ((VarCharVector) vector).set(index, value.toString().getBytes(StandardCharsets.UTF_8));
         } else {
-          LOG.log(
-              System.Logger.Level.WARNING,
-              "Unexpected vector type for STRING: {0}",
+          LOG.warn(
+              "Unexpected vector type for STRING: {}",
               vector.getClass());
           vector.setNull(index);
         }
@@ -559,9 +550,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
         if (value instanceof byte[] bytes) {
           ((VarBinaryVector) vector).set(index, bytes);
         } else {
-          LOG.log(
-              System.Logger.Level.WARNING,
-              "Expected byte[] for BYTES type, got: {0}",
+          LOG.warn(
+              "Expected byte[] for BYTES type, got: {}",
               value.getClass());
           vector.setNull(index);
         }
@@ -570,8 +560,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       case ARRAY -> handleArrayValue(vector, index, value, kafkaSchema);
       case MAP -> handleMapValue(vector, index, value, kafkaSchema);
       default -> {
-        LOG.log(
-            System.Logger.Level.WARNING, "Unsupported field type for vector population: {0}", type);
+        LOG.warn("Unsupported field type for vector population: {}", type);
         vector.setNull(index);
       }
     }
@@ -583,7 +572,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       Object value,
       org.apache.kafka.connect.data.Schema kafkaSchema) {
     if (!(value instanceof Struct struct) || !(vector instanceof StructVector structVector)) {
-      LOG.log(System.Logger.Level.WARNING, "STRUCT value/vector mismatch at index {0}", index);
+      LOG.warn("STRUCT value/vector mismatch at index {}", index);
       vector.setNull(index);
       return;
     }
@@ -603,7 +592,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       Object value,
       org.apache.kafka.connect.data.Schema kafkaSchema) {
     if (!(vector instanceof ListVector listVector) || !(value instanceof Collection<?> coll)) {
-      LOG.log(System.Logger.Level.WARNING, "ARRAY value/vector mismatch at index {0}", index);
+      LOG.warn("ARRAY value/vector mismatch at index {}", index);
       vector.setNull(index);
       return;
     }
@@ -626,7 +615,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       Object value,
       org.apache.kafka.connect.data.Schema kafkaSchema) {
     if (!(vector instanceof MapVector mapVector) || !(value instanceof Map<?, ?> mapVal)) {
-      LOG.log(System.Logger.Level.WARNING, "MAP value/vector mismatch at index {0}", index);
+      LOG.warn("MAP value/vector mismatch at index {}", index);
       vector.setNull(index);
       return;
     }
@@ -727,9 +716,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
             struct.put(f.name(), new Date(epochMillis));
             continue; // Skip the switch statement
           } catch (Exception e) {
-            LOG.log(
-                System.Logger.Level.WARNING,
-                "Failed to convert timestamp string for field {0}: {1}",
+            LOG.warn(
+                "Failed to convert timestamp string for field {}: {}",
                 f.name(),
                 stringValue);
             struct.put(f.name(), null);
