@@ -50,8 +50,7 @@ public class DucklakeSinkTask extends SinkTask {
     this.connectionFactory = new DucklakeConnectionFactory(config);
     this.writers = new HashMap<>();
     this.allocator = new RootAllocator();
-    this.converter =
-        new SinkRecordToArrowConverter(allocator, config.getConsumerOverrideMaxPollRecords());
+    this.converter = new SinkRecordToArrowConverter(allocator);
   }
 
   @Override
@@ -144,32 +143,30 @@ public class DucklakeSinkTask extends SinkTask {
 
       // Write each VectorSchemaRoot and ensure proper cleanup
       for (VectorSchemaRoot vectorSchemaRoot : vectorRoots) {
-        try {
-          writer.write(vectorSchemaRoot);
-
-          LOG.log(
-              System.Logger.Level.DEBUG,
-              "Processed Arrow IPC data with {0} rows for partition {1}",
-              vectorSchemaRoot.getRowCount(),
-              partition);
-        } catch (Exception e) {
-          LOG.log(
-              System.Logger.Level.ERROR,
-              "Failed to write Arrow IPC data for partition: " + partition,
-              e);
-          throw new RuntimeException("Failed to write Arrow IPC data", e);
-        } finally {
-          // Always close VectorSchemaRoot to prevent memory leaks
+        try (vectorSchemaRoot) {
           try {
-            vectorSchemaRoot.close();
+            writer.write(vectorSchemaRoot);
+
+            LOG.log(
+                System.Logger.Level.DEBUG,
+                "Processed Arrow IPC data with {0} rows for partition {1}",
+                vectorSchemaRoot.getRowCount(),
+                partition);
           } catch (Exception e) {
             LOG.log(
-                System.Logger.Level.WARNING,
-                "Failed to close VectorSchemaRoot for partition {0}: {1}",
-                partition,
-                e.getMessage());
+                System.Logger.Level.ERROR,
+                "Failed to write Arrow IPC data for partition: " + partition,
+                e);
+            throw new RuntimeException("Failed to write Arrow IPC data", e);
           }
+        } catch (Exception e) {
+          LOG.log(
+              System.Logger.Level.WARNING,
+              "Failed to close VectorSchemaRoot for partition {0}: {1}",
+              partition,
+              e.getMessage());
         }
+        // Always close VectorSchemaRoot to prevent memory leaks
       }
     }
   }

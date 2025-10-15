@@ -22,12 +22,14 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 import org.apache.arrow.memory.BufferAllocator;
+import org.apache.arrow.vector.BaseVariableWidthVector;
 import org.apache.arrow.vector.BigIntVector;
 import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.FieldVector;
@@ -48,6 +50,7 @@ import org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
+import org.apache.kafka.connect.data.Timestamp;
 import org.apache.kafka.connect.sink.SinkRecord;
 
 /**
@@ -61,22 +64,16 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
   private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
 
   private final BufferAllocator allocator;
-  private final int maxPollRecords;
 
   // not closed here
 
   public SinkRecordToArrowConverter(BufferAllocator externalAllocator) {
-    this(externalAllocator, 1024);
-  }
-
-  public SinkRecordToArrowConverter(BufferAllocator externalAllocator, int maxPollRecords) {
     if (externalAllocator == null) {
       throw new IllegalArgumentException("Allocator cannot be null");
     }
     // Create a child allocator to avoid exposing internal representation / accidental over-release
     this.allocator =
         externalAllocator.newChildAllocator("sink-record-converter", 0, Long.MAX_VALUE);
-    this.maxPollRecords = maxPollRecords > 0 ? maxPollRecords : 1024;
   }
 
   @Override
@@ -142,22 +139,6 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
                     return r1;
                   })
               .collect(Collectors.toList());
-
-      // Debug: log valueSchema presence and value type for each record to diagnose empty schema
-      // list
-      for (SinkRecord r : records) {
-        try {
-          LOG.log(
-              System.Logger.Level.DEBUG,
-              "Record topic={0} partition={1} valueSchema={2} valueClass={3}",
-              r.topic(),
-              r.kafkaPartition(),
-              r.valueSchema(),
-              r.value() != null ? r.value().getClass() : "null");
-        } catch (Exception e) {
-          // ignore logging errors in tests
-        }
-      }
 
       // Convert Kafka schemas to Arrow schemas
       List<Schema> arrowSchemas = extractArrowSchemas(records);
@@ -353,48 +334,12 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
 
   private void populateVectors(
       VectorSchemaRoot root, Collection<SinkRecord> records, Schema schema) {
-    // Calculate capacity needed based on record count
-    int recordCount = records.size();
+    // Calculate exact capacity needed based on record count
+    var recordCount = records.size();
 
-    // Pre-allocate vectors with sufficient capacity
-    // Use maxPollRecords configuration or at least the actual record count
-    int initialCapacity = Math.max(recordCount, maxPollRecords);
-
-    // Estimate bytes needed for variable-width fields (strings, binary)
-    // Use a conservative estimate of 256 bytes per string field per record
-    int estimatedBytesPerRecord =
-        schema.getFields().stream()
-            .mapToInt(
-                field -> {
-                  if (field.getType().getTypeID()
-                          == org.apache.arrow.vector.types.pojo.ArrowType.ArrowTypeID.Utf8
-                      || field.getType().getTypeID()
-                          == org.apache.arrow.vector.types.pojo.ArrowType.ArrowTypeID.Binary) {
-                    return 256; // Conservative estimate for string/binary fields
-                  }
-                  return 0;
-                })
-            .sum();
-
-    int totalEstimatedBytes =
-        Math.max(estimatedBytesPerRecord * recordCount, 64 * 1024); // At least 64KB
-
-    // Allocate vectors with calculated capacity
+    // Allocate vectors with exact capacity - no growth expected
     for (FieldVector vector : root.getFieldVectors()) {
-      if (vector instanceof org.apache.arrow.vector.BaseVariableWidthVector) {
-        // For variable-width vectors (strings, binary), allocate with byte capacity
-        ((org.apache.arrow.vector.BaseVariableWidthVector) vector)
-            .allocateNew(totalEstimatedBytes, initialCapacity);
-      } else {
-        // For fixed-width vectors, first allocate with default then resize
-        vector.allocateNew();
-        // Resize to desired capacity if current capacity is less
-        if (vector.getValueCapacity() < initialCapacity) {
-          while (vector.getValueCapacity() < initialCapacity) {
-            vector.reAlloc();
-          }
-        }
-      }
+      allocateVectorWithCapacity(vector, recordCount);
     }
 
     // Create mapping of field names to vectors
@@ -431,6 +376,49 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       }
       rowIndex++;
     }
+  }
+
+  private void allocateVectorWithCapacity(FieldVector vector, int recordCount) {
+    if (vector instanceof BaseVariableWidthVector) {
+      // For variable-width vectors (strings, binary), estimate bytes needed for this specific field
+      var estimatedBytesPerField = getEstimatedBytesPerField(vector, recordCount);
+      ((BaseVariableWidthVector) vector).allocateNew(estimatedBytesPerField, recordCount);
+    } else if (vector instanceof StructVector structVector) {
+      // For struct vectors, allocate with exact capacity and recursively allocate child vectors
+      structVector.allocateNew();
+      if (structVector.getValueCapacity() < recordCount) {
+        while (structVector.getValueCapacity() < recordCount) {
+          structVector.reAlloc();
+        }
+      }
+      // Recursively allocate child vectors
+      for (FieldVector childVector : structVector.getChildrenFromFields()) {
+        allocateVectorWithCapacity(childVector, recordCount);
+      }
+    } else {
+      // For fixed-width vectors, allocate with exact capacity
+      vector.allocateNew();
+      // Resize to exact capacity if current capacity is less
+      if (vector.getValueCapacity() < recordCount) {
+        while (vector.getValueCapacity() < recordCount) {
+          vector.reAlloc();
+        }
+      }
+    }
+  }
+
+  private int getEstimatedBytesPerField(FieldVector vector, int recordCount) {
+    // Get the field from the vector to determine its type
+    var field = vector.getField();
+    var bytesPerValue =
+        switch (field.getType().getTypeID()) {
+          case Utf8View, Utf8, LargeUtf8 -> 256; // Conservative estimate for string fields
+          case BinaryView, Binary, LargeBinary -> 256; // Conservative estimate for binary fields
+          default -> 64; // Default for other variable-width types
+        };
+
+    // For columnar format, estimate total bytes for this field across all records
+    return Math.max(bytesPerValue * recordCount, 64 * 1024); // At least 64KB
   }
 
   private Map<String, FieldVector> createVectorMap(VectorSchemaRoot root, Schema schema) {
@@ -499,7 +487,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
             vector.setNull(index);
             return;
           }
-        } else if (value instanceof java.util.Date dateValue) {
+        } else if (value instanceof Date dateValue) {
           // Handle java.util.Date
           timestampVector.set(index, dateValue.getTime());
           return;
@@ -671,7 +659,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       return null;
     }
     if (example instanceof Map<?, ?> map) {
-      SchemaBuilder sb = org.apache.kafka.connect.data.SchemaBuilder.struct();
+      SchemaBuilder sb = SchemaBuilder.struct();
       for (var e : map.entrySet()) {
         String name = String.valueOf(e.getKey());
         Object v = e.getValue();
@@ -695,7 +683,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       }
       // Only create array schema if we found a non-null element type
       if (elemSchema != null) {
-        return org.apache.kafka.connect.data.SchemaBuilder.array(elemSchema).build();
+        return SchemaBuilder.array(elemSchema).build();
       }
       // If all elements are null, we can't determine the array element type
       return null;
@@ -710,7 +698,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
     if (example instanceof byte[]) return org.apache.kafka.connect.data.Schema.BYTES_SCHEMA;
 
     if (example instanceof String str && TimestampUtils.isTimestamp(str)) {
-      return org.apache.kafka.connect.data.Timestamp.builder().optional().build();
+      return Timestamp.builder().optional().build();
     }
 
     // default to string
@@ -736,7 +724,7 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
         if (raw instanceof String stringValue && TimestampUtils.isTimestamp(stringValue)) {
           try {
             long epochMillis = TimestampUtils.parseTimestampToEpochMillis(stringValue);
-            struct.put(f.name(), new java.util.Date(epochMillis));
+            struct.put(f.name(), new Date(epochMillis));
             continue; // Skip the switch statement
           } catch (Exception e) {
             LOG.log(
