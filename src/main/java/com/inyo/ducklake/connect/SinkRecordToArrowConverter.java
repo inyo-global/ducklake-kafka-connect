@@ -365,31 +365,63 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
   }
 
   private void allocateVectorWithCapacity(FieldVector vector, int recordCount) {
-    if (vector instanceof BaseVariableWidthVector) {
-      // For variable-width vectors (strings, binary), estimate bytes needed for this specific field
-      var estimatedBytesPerField = getEstimatedBytesPerField(vector, recordCount);
-      ((BaseVariableWidthVector) vector).allocateNew(estimatedBytesPerField, recordCount);
-    } else if (vector instanceof StructVector structVector) {
-      // For struct vectors, allocate with exact capacity and recursively allocate child vectors
-      structVector.allocateNew();
-      if (structVector.getValueCapacity() < recordCount) {
-        while (structVector.getValueCapacity() < recordCount) {
-          structVector.reAlloc();
+    try {
+      if (vector instanceof BaseVariableWidthVector) {
+        // For variable-width vectors (strings, binary), estimate bytes needed for this specific
+        // field
+        var estimatedBytesPerField = getEstimatedBytesPerField(vector, recordCount);
+        ((BaseVariableWidthVector) vector).allocateNew(estimatedBytesPerField, recordCount);
+      } else if (vector instanceof StructVector structVector) {
+        // For struct vectors, allocate with exact capacity and recursively allocate child vectors
+        structVector.allocateNew();
+        if (structVector.getValueCapacity() < recordCount) {
+          while (structVector.getValueCapacity() < recordCount) {
+            structVector.reAlloc();
+          }
+        }
+        // Recursively allocate child vectors
+        for (FieldVector childVector : structVector.getChildrenFromFields()) {
+          allocateVectorWithCapacity(childVector, recordCount);
+        }
+      } else {
+        // For fixed-width vectors, allocate with exact capacity
+        vector.allocateNew();
+        // Resize to exact capacity if current capacity is less
+        if (vector.getValueCapacity() < recordCount) {
+          while (vector.getValueCapacity() < recordCount) {
+            vector.reAlloc();
+          }
         }
       }
-      // Recursively allocate child vectors
-      for (FieldVector childVector : structVector.getChildrenFromFields()) {
-        allocateVectorWithCapacity(childVector, recordCount);
+    } catch (ArithmeticException e) {
+      var fieldName = vector.getField() != null ? vector.getField().getName() : "<unknown>";
+      var vectorType = vector.getClass().getSimpleName();
+      var currentCapacity = safeGetValueCapacity(vector);
+      var extra = "";
+      if (vector instanceof BaseVariableWidthVector) {
+        var est = getEstimatedBytesPerField(vector, recordCount);
+        extra = ", estimatedBytes=" + est;
       }
-    } else {
-      // For fixed-width vectors, allocate with exact capacity
-      vector.allocateNew();
-      // Resize to exact capacity if current capacity is less
-      if (vector.getValueCapacity() < recordCount) {
-        while (vector.getValueCapacity() < recordCount) {
-          vector.reAlloc();
-        }
-      }
+      throw new RuntimeException(
+          "Vector allocation failed for field '"
+              + fieldName
+              + "' ("
+              + vectorType
+              + ")"
+              + ". recordCount="
+              + recordCount
+              + ", currentCapacity="
+              + currentCapacity
+              + extra,
+          e);
+    }
+  }
+
+  private int safeGetValueCapacity(FieldVector vector) {
+    try {
+      return vector.getValueCapacity();
+    } catch (Exception ex) {
+      return -1;
     }
   }
 
