@@ -26,7 +26,6 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Collectors;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.BaseVariableWidthVector;
@@ -419,15 +418,33 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
   private void populateStructData(Map<String, FieldVector> vectorMap, Struct struct, int rowIndex) {
     // Handle fields that exist in the struct
     for (org.apache.kafka.connect.data.Field kafkaField : struct.schema().fields()) {
-      String fieldName = kafkaField.name();
-      Object value = struct.get(fieldName);
-      FieldVector vector = vectorMap.get(fieldName);
+      var fieldName = kafkaField.name();
+      var value = struct.get(fieldName);
+      var vector = vectorMap.get(fieldName);
       if (vector != null) {
-        setVectorValue(vector, rowIndex, value, kafkaField.schema());
+        try {
+          setVectorValue(vector, rowIndex, value, kafkaField.schema());
+        } catch (Exception e) {
+          var valueDesc = safeDescribeValue(value);
+          var vectorDesc = vector.getClass().getSimpleName();
+          var schemaType = kafkaField.schema() != null ? kafkaField.schema().type().name() : "null";
+          throw new RuntimeException(
+              "Failed while setting field '"
+                  + fieldName
+                  + "' at row "
+                  + rowIndex
+                  + ". Value="
+                  + valueDesc
+                  + ", Vector="
+                  + vectorDesc
+                  + ", KafkaSchemaType="
+                  + schemaType,
+              e);
+        }
       }
     }
     // Handle fields that exist in unified schema but not in this struct (set to null)
-    Set<String> structFieldNames =
+    var structFieldNames =
         struct.schema().fields().stream()
             .map(org.apache.kafka.connect.data.Field::name)
             .collect(Collectors.toSet());
@@ -435,6 +452,23 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       if (!structFieldNames.contains(entry.getKey())) {
         entry.getValue().setNull(rowIndex);
       }
+    }
+  }
+
+  private String safeDescribeValue(Object value) {
+    if (value == null) return "null";
+    if (value instanceof byte[] b) return "byte[" + b.length + "]";
+    try {
+      var s = String.valueOf(value);
+      // normalize whitespace and limit size
+      s = s.replace('\n', ' ').replace('\r', ' ');
+      var max = 512;
+      if (s.length() > max) {
+        return '"' + s.substring(0, max) + "..." + '"' + " (len=" + s.length() + ")";
+      }
+      return '"' + s + '"';
+    } catch (Exception ex) {
+      return "<unprintable " + value.getClass().getName() + ">";
     }
   }
 
