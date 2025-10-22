@@ -532,7 +532,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       case INT64 -> {
         // Handle case where schema expects INT64 but vector is actually VarChar due to unification
         if (vector instanceof VarCharVector) {
-          ((VarCharVector) vector).setSafe(index, value.toString().getBytes(StandardCharsets.UTF_8));
+          ((VarCharVector) vector)
+              .setSafe(index, value.toString().getBytes(StandardCharsets.UTF_8));
         } else {
           ((BigIntVector) vector).set(index, ((Number) value).longValue());
         }
@@ -557,7 +558,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
           LOG.warn("Cannot set non-timestamp value to timestamp vector: {}", value);
           vector.setNull(index);
         } else if (vector instanceof VarCharVector) {
-          ((VarCharVector) vector).setSafe(index, value.toString().getBytes(StandardCharsets.UTF_8));
+          ((VarCharVector) vector)
+              .setSafe(index, value.toString().getBytes(StandardCharsets.UTF_8));
         } else {
           LOG.warn("Unexpected vector type for STRING: {}", vector.getClass());
           vector.setNull(index);
