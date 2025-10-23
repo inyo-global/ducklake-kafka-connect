@@ -73,8 +73,8 @@ public final class DucklakeTableManager {
    */
   public boolean ensureTable(Schema arrowSchema) throws SQLException {
     synchronized (LOCK) {
-      String table = config.destinationTable();
-      boolean tableExisted = tableExists(table);
+      final var table = config.destinationTable();
+      final var tableExisted = tableExists(table);
       if (!tableExisted) {
         if (!config.autoCreateTable()) {
           throw new IllegalStateException(
@@ -119,11 +119,11 @@ public final class DucklakeTableManager {
           "Identifiers quoted via SqlIdentifierUtil.quote; "
               + "PreparedStatement cannot parameterize DDL identifiers.")
   private void createTable(Schema arrowSchema) throws SQLException {
-    String cols =
+    var cols =
         arrowSchema.getFields().stream()
             .map(f -> SqlIdentifierUtil.quote(f.getName()) + " " + toDuckDBType(f.getType()))
             .collect(Collectors.joining(", "));
-    StringBuilder ddl = new StringBuilder();
+    var ddl = new StringBuilder();
     ddl.append("CREATE TABLE ")
         .append("lake.main.")
         .append(SqlIdentifierUtil.quote(config.destinationTable()))
@@ -138,8 +138,8 @@ public final class DucklakeTableManager {
 
     // Set partitioning after table creation using ALTER TABLE SET PARTITIONED BY
     if (config.partitionByExpressions().length > 0) {
-      String partitionExprs = String.join(", ", config.partitionByExpressions());
-      String alterDdl =
+      final var partitionExprs = String.join(", ", config.partitionByExpressions());
+      final var alterDdl =
           "ALTER TABLE " + qualifiedTableRef() + " SET PARTITIONED BY (" + partitionExprs + ")";
       LOG.log(System.Logger.Level.INFO, "Setting table partitioning: {0}", alterDdl);
       try (Statement st = connection.createStatement()) {
@@ -155,18 +155,18 @@ public final class DucklakeTableManager {
       value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
       justification = "DDL evolve validated: identifiers quoted via SqlIdentifierUtil.quote.")
   private void evolveTableSchema(Schema arrowSchema) throws SQLException {
-    Map<String, String> existing = loadExistingTableMeta();
-    List<Field> fields = arrowSchema.getFields();
-    List<Field> newColumns = new ArrayList<>();
-    for (Field field : fields) {
-      String colNameLower = field.getName().toLowerCase(Locale.ROOT);
-      String meta = existing.get(colNameLower);
+    final var existing = loadExistingTableMeta();
+    final var fields = arrowSchema.getFields();
+    final var newColumns = new ArrayList<Field>();
+    for (final var field : fields) {
+      final var colNameLower = field.getName().toLowerCase(Locale.ROOT);
+      final var meta = existing.get(colNameLower);
       if (meta == null) {
         newColumns.add(field);
       } else {
-        String expectedDuck = toDuckDBType(field.getType());
+        final var expectedDuck = toDuckDBType(field.getType());
         if (!meta.equalsIgnoreCase(expectedDuck)) {
-          TypeEvolutionDecision decision = evaluateTypeEvolution(meta, expectedDuck);
+          final var decision = evaluateTypeEvolution(meta, expectedDuck);
           switch (decision) {
             case COMPATIBLE_KEEP -> {}
             case UPGRADE -> performTypeUpgrade(field.getName(), expectedDuck);
@@ -182,20 +182,34 @@ public final class DucklakeTableManager {
         }
       }
     }
-    if (!newColumns.isEmpty()) {
-      for (Field nf : newColumns) {
-        String newType = toDuckDBType(nf.getType());
-        String ddl =
-            "ALTER TABLE "
+    if (newColumns.isEmpty()) {
+      return;
+    }
+    for (final var nf : newColumns) {
+      final var newType = toDuckDBType(nf.getType());
+      final var ddl =
+          "ALTER TABLE "
+              + qualifiedTableRef()
+              + " ADD COLUMN "
+              + SqlIdentifierUtil.quote(nf.getName())
+              + " "
+              + newType;
+      LOG.log(System.Logger.Level.INFO, "Adding new column: {0}", ddl);
+      try (final var st = connection.createStatement()) {
+        st.execute(ddl);
+      } catch (SQLException e) {
+        LOG.log(
+            System.Logger.Level.ERROR,
+            "Failed to add new column "
+                + nf.getName()
+                + " of type "
+                + newType
+                + ": "
+                + " to table: "
                 + qualifiedTableRef()
-                + " ADD COLUMN "
-                + SqlIdentifierUtil.quote(nf.getName())
-                + " "
-                + newType;
-        LOG.log(System.Logger.Level.INFO, "Adding new column: {0}", ddl);
-        try (Statement st = connection.createStatement()) {
-          st.execute(ddl);
-        }
+                + e.getMessage(),
+            e);
+        throw e;
       }
     }
   }
@@ -287,13 +301,11 @@ public final class DucklakeTableManager {
         case SECOND, MILLISECOND, MICROSECOND, NANOSECOND -> "TIMESTAMP";
       };
     } else if (type instanceof ArrowType.Date date) {
-      // Suporte para tipos de data
       return switch (date.getUnit()) {
         case DAY -> "DATE";
         case MILLISECOND -> "DATE";
       };
     } else if (type instanceof ArrowType.Time time) {
-      // Suporte para tipos de tempo
       return switch (time.getUnit()) {
         case SECOND, MILLISECOND, MICROSECOND, NANOSECOND -> "TIME";
       };
