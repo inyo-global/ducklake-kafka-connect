@@ -29,6 +29,12 @@ public class KafkaSchemaToArrow {
   public static org.apache.arrow.vector.types.pojo.Schema arrowSchemaFromKafka(Schema kafkaSchema) {
     var fields =
         kafkaSchema.fields().stream()
+            .filter(
+                f -> {
+                  var s = f.schema();
+                  return !(s.type() == Schema.Type.STRUCT
+                      && (s.fields() == null || s.fields().isEmpty()));
+                })
             .map(KafkaSchemaToArrow::convertField)
             .collect(Collectors.toList());
 

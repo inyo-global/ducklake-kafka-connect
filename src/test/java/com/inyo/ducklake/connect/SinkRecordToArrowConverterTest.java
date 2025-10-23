@@ -1057,4 +1057,35 @@ class SinkRecordToArrowConverterTest {
       result.close();
     }
   }
+
+  @Test
+  @DisplayName("Handles empty nested STRUCT (no fields)")
+  void testEmptyNestedStruct() {
+    // Given: outer struct has id and address (empty struct)
+    var emptyAddress = SchemaBuilder.struct().build();
+    var outer =
+        SchemaBuilder.struct()
+            .field("id", org.apache.kafka.connect.data.Schema.INT64_SCHEMA)
+            .field("address", emptyAddress)
+            .build();
+
+    var addressStruct = new Struct(emptyAddress); // no fields set
+    var outerStruct = new Struct(outer).put("id", 123L).put("address", addressStruct);
+
+    // When
+    var rec = new SinkRecord("topic", 0, null, null, outer, outerStruct, 0);
+    var converter = new SinkRecordToArrowConverter(new org.apache.arrow.memory.RootAllocator());
+    var root = converter.convertRecords(List.of(rec));
+
+    // Then: empty struct field should be pruned from unified schema
+    assertEquals(1, root.getRowCount());
+    var idVec = (org.apache.arrow.vector.BigIntVector) root.getVector("id");
+    assertEquals(123L, idVec.get(0));
+
+    var addressVec = root.getVector("address");
+    assertTrue(addressVec == null, "address field should be removed from schema");
+
+    root.close();
+    converter.close();
+  }
 }
