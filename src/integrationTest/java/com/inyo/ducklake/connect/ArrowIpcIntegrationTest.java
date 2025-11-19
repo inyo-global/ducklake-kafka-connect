@@ -20,6 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.minio.MakeBucketArgs;
+import io.minio.MinioClient;
 import java.io.ByteArrayOutputStream;
 import java.nio.channels.Channels;
 import java.time.Duration;
@@ -27,6 +29,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
+import java.util.UUID;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.IntVector;
@@ -45,14 +48,16 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.containers.Network;
+import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 
 @Testcontainers
-class ArrowIpcConverterIntegrationTest {
+class ArrowIpcIntegrationTest {
 
   private static final Network network = Network.newNetwork();
   private static EmbeddedKafkaConnect embeddedKafkaConnect;
@@ -62,6 +67,26 @@ class ArrowIpcConverterIntegrationTest {
       new KafkaContainer("apache/kafka-native:4.0.0")
           .withNetwork(network)
           .withNetworkAliases("kafka");
+
+  @Container
+  @SuppressWarnings("resource")
+  public static final PostgreSQLContainer<?> postgres =
+      new PostgreSQLContainer<>("postgres:17")
+          .withNetwork(network)
+          .withNetworkAliases("postgres")
+          .withDatabaseName("ducklake_catalog")
+          .withUsername("duck")
+          .withPassword("duck");
+
+  @Container
+  public static final MinIOContainer minio =
+      new MinIOContainer("minio/minio:latest")
+          .withNetwork(network)
+          .withNetworkAliases("minio")
+          .withEnv("MINIO_ROOT_USER", "minio")
+          .withEnv("MINIO_ROOT_PASSWORD", "minio123")
+          .withExposedPorts(9000)
+          .withCommand("server", "/data");
 
   private static BufferAllocator allocator;
   private static ArrowIpcConverter arrowIpcConverter;
@@ -101,8 +126,10 @@ class ArrowIpcConverterIntegrationTest {
 
   @Test
   void shouldProcessArrowIpcMessagesEndToEnd() throws Exception {
-    var topicName = "arrow-ipc-test-topic";
-    var connectorName = "arrow-ipc-test-connector";
+    var testId = UUID.randomUUID().toString().replace("-", "_");
+    var topicName = "arrow_ipc_test_topic_" + testId;
+    var tableName = "arrow_ipc_tbl_" + testId;
+    var connectorName = "arrow-ipc-test-connector-" + testId;
 
     // 1. Create Arrow IPC test data
     var arrowIpcData = createTestArrowIpcData();
@@ -137,34 +164,47 @@ class ArrowIpcConverterIntegrationTest {
       System.out.println("✅ Arrow IPC data sent to Kafka topic: " + topicName);
     }
 
+    // Ensure MinIO bucket exists (test-bucket)
+    var minioHost = minio.getHost();
+    var minioPort = minio.getMappedPort(9000);
+    var endpoint = String.format("http://%s:%d", minioHost, minioPort);
+    try (var minioClient =
+        MinioClient.builder().endpoint(endpoint).credentials("minio", "minio123").build()) {
+      var bucketExists =
+          minioClient.bucketExists(
+              io.minio.BucketExistsArgs.builder().bucket("test-bucket").build());
+      if (!bucketExists) {
+        minioClient.makeBucket(MakeBucketArgs.builder().bucket("test-bucket").build());
+      }
+    }
+
     // 5. Create connector configuration for Arrow IPC
-    var connectorConfig = createArrowIpcConnectorConfig(topicName);
+    var connectorConfig = createArrowIpcConnectorConfig(connectorName, topicName, tableName);
 
     // 6. Deploy connector
     embeddedKafkaConnect.createConnector(connectorName, connectorConfig);
 
-    // 7. Wait for connector to be running
-    Awaitility.await()
-        .atMost(Duration.ofSeconds(30))
-        .pollInterval(Duration.ofSeconds(2))
-        .until(
-            () -> {
-              var state = embeddedKafkaConnect.getConnectorStatus(connectorName);
-              return state != null && "RUNNING".equals(state.connector().state());
-            });
+    // 7. Wait for connector/tasks running
+    IntegrationTestUtils.awaitConnectorRunning(embeddedKafkaConnect, connectorName);
 
     System.out.println("✅ Arrow IPC connector deployed and running");
 
-    // 8. Wait for data processing (this is a simplified test - in real scenario we'd verify data in
-    // DuckDB)
-    Thread.sleep(5000);
+    // 8. Assert ingested data
+    var factory = IntegrationTestUtils.connectionFactory(topicName, tableName, postgres, minio);
+    // Build expected row assertion after ingestion (id=1001, name, age)
+    Awaitility.await("Arrow IPC row ingested")
+        .atMost(Duration.ofSeconds(60))
+        .pollInterval(Duration.ofSeconds(2))
+        .ignoreExceptions()
+        .untilAsserted(
+            () ->
+                IntegrationTestUtils.assertTableRow(
+                    factory,
+                    tableName,
+                    "SELECT id, name, age FROM lake.main." + tableName,
+                    Map.of("id", 1001, "name", "TestUser", "age", 42)));
 
-    // 9. Verify connector is still running (indicates successful processing)
-    var finalState = embeddedKafkaConnect.getConnectorStatus(connectorName);
-    assertNotNull(finalState);
-    assertEquals("RUNNING", finalState.connector().state());
-
-    System.out.println("✅ Arrow IPC integration test completed successfully!");
+    System.out.println("✅ Arrow IPC integration test completed successfully (data verified)!");
   }
 
   @Test
@@ -265,32 +305,17 @@ class ArrowIpcConverterIntegrationTest {
     return outputStream.toByteArray();
   }
 
-  private Map<String, String> createArrowIpcConnectorConfig(String topicName) {
-    var config = new HashMap<String, String>();
-
-    // Basic connector configuration
-    config.put("name", "arrow-ipc-test-connector");
+  private Map<String, String> createArrowIpcConnectorConfig(
+      String connectorName, String topicName, String tableName) {
+    var config =
+        IntegrationTestUtils.baseConnectorConfig(topicName, tableName, postgres, minio, true, "id");
+    config.put("name", connectorName);
     config.put("connector.class", "com.inyo.ducklake.connect.DucklakeSinkConnector");
     config.put("tasks.max", "1");
     config.put("topics", topicName);
-
-    // Use Arrow IPC converter for values
     config.put("value.converter", "com.inyo.ducklake.connect.ArrowIpcConverter");
     config.put("key.converter", "org.apache.kafka.connect.storage.StringConverter");
-
-    // DuckLake configuration
-    config.put("ducklake.catalog_uri", "memory");
-    config.put("ducklake.data_path", "/tmp/test-data");
     config.put("ducklake.batch.size", "1000");
-    config.put("ducklake.table.auto.create", "true");
-
-    // S3 configuration (using dummy values for test)
-    config.put("s3.endpoint", "localhost:9000");
-    config.put("s3.access_key_id", "test");
-    config.put("s3.secret_access_key", "test123");
-    config.put("s3.use_ssl", "false");
-    config.put("s3.url_style", "path");
-
     return config;
   }
 }

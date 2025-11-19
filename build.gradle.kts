@@ -9,7 +9,12 @@ plugins {
 group = "com.inyo"
 version = "1.0-SNAPSHOT"
 
-repositories { mavenCentral() }
+repositories {
+    mavenCentral()
+    maven {
+        url = uri("https://packages.confluent.io/maven/")
+    }
+}
 
 tasks.jar {
     archiveBaseName.set("ducklake-connector")
@@ -160,7 +165,7 @@ spotless {
 }
 
 dependencies {
-    implementation("org.duckdb:duckdb_jdbc:1.4.1.0")
+    implementation("org.duckdb:duckdb_jdbc:1.4.2.0")
     implementation("org.apache.arrow:arrow-vector:18.3.0") {
         exclude(group = "org.slf4j")
     }
@@ -191,6 +196,8 @@ dependencies {
     add("integrationTestImplementation", "org.apache.kafka:connect-json:4.0.0")
     add("integrationTestImplementation", "org.apache.kafka:kafka-clients:4.0.0")
     add("integrationTestImplementation", "org.slf4j:slf4j-simple:2.0.9")
+    add("integrationTestImplementation", "io.confluent:kafka-avro-serializer:8.1.0")
+    add("integrationTestImplementation", "io.confluent:kafka-connect-avro-converter:8.1.0")
 }
 
 // Configure duplicate strategy for integration test resources

@@ -45,13 +45,27 @@ public class DucklakeConnectionFactory {
     properties.setProperty("s3_secret_access_key", config.getS3SecretAccessKey());
     properties.setProperty("threads", "1");
     this.conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
-    final String statement =
-        String.format(
-            "ATTACH IF NOT EXISTS 'ducklake:%s' AS lake (DATA_PATH '%s');",
-            config.getDucklakeCatalogUri(), config.getDataPath());
+    final String statement = buildAttachStatement();
     try (var st = conn.createStatement()) {
       st.execute(statement);
     }
+  }
+
+  /* package */ String buildAttachStatement() {
+    var sb = new StringBuilder();
+    sb.append("ATTACH IF NOT EXISTS 'ducklake:");
+    sb.append(config.getDucklakeCatalogUri());
+    sb.append("' AS lake (");
+    sb.append("DATA_PATH '");
+    sb.append(config.getDataPath());
+    sb.append("'");
+    var maybeInline = config.getDataInliningRowLimit();
+    if (maybeInline.isPresent()) {
+      sb.append(", DATA_INLINING_ROW_LIMIT ");
+      sb.append(maybeInline.getAsInt());
+    }
+    sb.append(");");
+    return sb.toString();
   }
 
   public DuckDBConnection getConnection() {

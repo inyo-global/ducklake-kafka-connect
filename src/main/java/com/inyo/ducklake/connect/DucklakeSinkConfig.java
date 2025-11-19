@@ -18,9 +18,11 @@ package com.inyo.ducklake.connect;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.Set;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.ConfigDef;
+import org.apache.kafka.common.config.ConfigException;
 
 public class DucklakeSinkConfig extends AbstractConfig {
 
@@ -28,6 +30,7 @@ public class DucklakeSinkConfig extends AbstractConfig {
   public static final String VERSION = "1.0.0";
 
   public static final String DUCKLAKE_CATALOG_URI = "ducklake.catalog_uri";
+  public static final String DATA_INLINING_ROW_LIMIT = "data.inlining.row.limit";
 
   public static final ConfigDef CONFIG_DEF = newConfigDef();
 
@@ -52,6 +55,12 @@ public class DucklakeSinkConfig extends AbstractConfig {
             ConfigDef.Type.STRING,
             ConfigDef.Importance.HIGH,
             "Ducklake catalog URI, e.g., postgres:dbname=ducklake_catalog host=localhost")
+        .define(
+            DATA_INLINING_ROW_LIMIT,
+            ConfigDef.Type.STRING,
+            "off",
+            ConfigDef.Importance.MEDIUM,
+            "Maximum number of rows to inline into metadata for small files, or 'off' to disable")
         .define(
             TOPICS_TABLES_MAP,
             ConfigDef.Type.STRING,
@@ -129,6 +138,36 @@ public class DucklakeSinkConfig extends AbstractConfig {
 
   public int getConsumerOverrideMaxPollRecords() {
     return getInt(CONSUMER_OVERRIDE_MAX_POLL_RECORDS);
+  }
+
+  /**
+   * Returns the configured data inlining row limit.
+   *
+   * <p>Default is 'off' (data inlining disabled). If value is the string "off" (case-insensitive),
+   * data inlining is disabled and an empty OptionalInt is returned.
+   */
+  public OptionalInt getDataInliningRowLimit() {
+    var raw = getString(DATA_INLINING_ROW_LIMIT);
+    if (raw == null) {
+      return OptionalInt.empty();
+    }
+    var trimmed = raw.trim();
+    if (trimmed.isEmpty()) {
+      return OptionalInt.empty();
+    }
+    if ("off".equalsIgnoreCase(trimmed)) {
+      return OptionalInt.empty();
+    }
+    try {
+      var v = Integer.parseInt(trimmed);
+      if (v < 0) {
+        throw new ConfigException(
+            "" + DATA_INLINING_ROW_LIMIT + " must be a non-negative integer or 'off'");
+      }
+      return OptionalInt.of(v);
+    } catch (NumberFormatException e) {
+      throw new ConfigException("Invalid value for " + DATA_INLINING_ROW_LIMIT + ": " + raw);
+    }
   }
 
   public Map<String, String> getTopicToTableMap() {
