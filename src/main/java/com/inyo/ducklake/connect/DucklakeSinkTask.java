@@ -94,7 +94,29 @@ public class DucklakeSinkTask extends SinkTask {
         processTraditionalRecords(records);
       }
     } catch (Exception e) {
-      LOG.log(System.Logger.Level.ERROR, "Error processing records", e);
+      // Build a concise metadata sample for easier debugging (topic:partition@offset)
+      var sb = new StringBuilder();
+      sb.append("Error processing records. batchSize=")
+          .append(records.size())
+          .append(". sampleOffsets=");
+      var idx = 0;
+      for (SinkRecord r : records) {
+        var offset = String.valueOf(r.kafkaOffset());
+        sb.append("[")
+            .append(r.topic())
+            .append(":")
+            .append(r.kafkaPartition())
+            .append("@")
+            .append(offset)
+            .append("]");
+        if (++idx >= 10) {
+          sb.append("(truncated)");
+          break;
+        } else {
+          sb.append(',');
+        }
+      }
+      LOG.log(System.Logger.Level.ERROR, sb.toString(), e);
       throw new RuntimeException("Failed to process sink records", e);
     }
   }
