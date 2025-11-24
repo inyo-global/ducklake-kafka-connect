@@ -124,6 +124,10 @@ public final class DucklakeWriter implements AutoCloseable {
           fields.stream()
               .map(f -> tempTable + "." + SqlIdentifierUtil.quote(f.getName()))
               .collect(Collectors.joining(", "));
+      var targetCols =
+          fields.stream()
+              .map(f -> SqlIdentifierUtil.quote(f.getName()))
+              .collect(Collectors.joining(", "));
       var sql = new StringBuilder();
       sql.append("MERGE INTO ")
           .append(tableQuoted)
@@ -135,7 +139,13 @@ public final class DucklakeWriter implements AutoCloseable {
       if (updateSetClause != null) {
         sql.append("WHEN MATCHED THEN UPDATE SET ").append(updateSetClause).append(" ");
       }
-      sql.append("WHEN NOT MATCHED THEN INSERT VALUES (").append(insertCols).append(")");
+      // Use explicit target column list to avoid positional inserts. Map by name instead of by
+      // position.
+      sql.append("WHEN NOT MATCHED THEN INSERT (")
+          .append(targetCols)
+          .append(") VALUES (")
+          .append(insertCols)
+          .append(")");
 
       LOG.debug("Executing MERGE: {}", sql);
       try (var ps = connection.prepareStatement(sql.toString())) {
