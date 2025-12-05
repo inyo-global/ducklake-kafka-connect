@@ -153,9 +153,8 @@ public class DucklakeSinkTask extends SinkTask {
     if (!lockAcquired) {
       consecutiveFlushSkips++;
       if (consecutiveFlushSkips >= MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING) {
-        LOG.log(
-            System.Logger.Level.WARNING,
-            "Time-based flush check skipped {0} consecutive times - lock contention may delay flushes",
+        LOG.warn(
+            "Time-based flush check skipped {} consecutive times - lock contention may delay flushes",
             consecutiveFlushSkips);
       }
       return;

@@ -40,7 +40,7 @@ import org.slf4j.LoggerFactory;
  */
 public final class DucklakeTableManager {
 
-  private static final System.Logger LOG = System.getLogger(DucklakeTableManager.class.getName());
+  private static final Logger LOG = LoggerFactory.getLogger(DucklakeTableManager.class);
 
   // Per-table locks to allow concurrent operations on different tables
   private static final ConcurrentHashMap<String, Object> TABLE_LOCKS = new ConcurrentHashMap<>();
@@ -76,12 +76,7 @@ public final class DucklakeTableManager {
   public boolean ensureTable(Schema arrowSchema) throws SQLException {
     final var table = config.destinationTable();
     // Get or create a lock specific to this table, allowing concurrent operations on different tables
-    Object tableLock = 
-      
-      
-      
-      
-      .computeIfAbsent(table.toLowerCase(Locale.ROOT), k -> new Object());
+    Object tableLock = TABLE_LOCKS.computeIfAbsent(table.toLowerCase(Locale.ROOT), k -> new Object());
 
     synchronized (tableLock) {
       final var tableExisted = tableExists(table);
