@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
@@ -54,7 +55,7 @@ public class DucklakeSinkTask extends SinkTask {
   private final ReentrantLock flushLock = new ReentrantLock();
 
   // Track skipped time-based flushes to ensure they eventually happen
-  private volatile int consecutiveFlushSkips = 0;
+  private final AtomicInteger consecutiveFlushSkips = new AtomicInteger(0);
   private static final int MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING = 5;
   private static final long FLUSH_LOCK_TIMEOUT_MS = 100;
 
@@ -69,8 +70,7 @@ public class DucklakeSinkTask extends SinkTask {
       pendingBatches.add(root);
       recordCount += root.getRowCount();
       // Estimate bytes from Arrow buffer sizes
-      estimatedBytes +=
-          root.getFieldVectors().stream().mapToLong(v -> v.getBufferSize()).sum();
+      estimatedBytes += root.getFieldVectors().stream().mapToLong(v -> v.getBufferSize()).sum();
     }
 
     void clear() {
@@ -132,11 +132,13 @@ public class DucklakeSinkTask extends SinkTask {
         fileSizeBytes);
 
     // Start scheduled flush checker (runs every 1 second to check time-based flush)
-    this.flushScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-      Thread t = new Thread(r, "ducklake-flush-scheduler");
-      t.setDaemon(true);
-      return t;
-    });
+    this.flushScheduler =
+        Executors.newSingleThreadScheduledExecutor(
+            r -> {
+              Thread t = new Thread(r, "ducklake-flush-scheduler");
+              t.setDaemon(true);
+              return t;
+            });
     flushScheduler.scheduleAtFixedRate(this::checkTimeBasedFlush, 1, 1, TimeUnit.SECONDS);
   }
 
@@ -151,23 +153,21 @@ public class DucklakeSinkTask extends SinkTask {
     }
 
     if (!lockAcquired) {
-      consecutiveFlushSkips++;
-      if (consecutiveFlushSkips >= MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING) {
-        LOG.log(
-            System.Logger.Level.WARNING,
-            "Time-based flush check skipped {0} consecutive times - lock contention may delay flushes",
-            consecutiveFlushSkips);
+      int skips = consecutiveFlushSkips.incrementAndGet();
+      if (skips >= MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING) {
+        LOG.warn(
+            "Time-based flush check skipped {} consecutive times - lock contention may delay flushes",
+            skips);
       }
       return;
     }
 
     try {
-      consecutiveFlushSkips = 0; // Reset on successful lock acquisition
+      consecutiveFlushSkips.set(0); // Reset on successful lock acquisition
       long now = System.currentTimeMillis();
       for (Map.Entry<TopicPartition, PartitionBuffer> entry : buffers.entrySet()) {
         PartitionBuffer buffer = entry.getValue();
-        if (!buffer.pendingBatches.isEmpty()
-            && (now - buffer.lastFlushTime) >= flushIntervalMs) {
+        if (!buffer.pendingBatches.isEmpty() && (now - buffer.lastFlushTime) >= flushIntervalMs) {
           TopicPartition partition = entry.getKey();
           LOG.info(
               "Time-based flush triggered for partition {} (age={}ms, records={}, bytes={})",
