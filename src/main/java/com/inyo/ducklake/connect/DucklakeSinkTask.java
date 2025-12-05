@@ -153,9 +153,8 @@ public class DucklakeSinkTask extends SinkTask {
     if (!lockAcquired) {
       consecutiveFlushSkips++;
       if (consecutiveFlushSkips >= MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING) {
-        LOG.log(
-            System.Logger.Level.WARNING,
-            "Time-based flush check skipped {0} consecutive times - lock contention may delay flushes",
+        LOG.warn(
+            "Time-based flush check skipped {} consecutive times - lock contention may delay flushes",
             consecutiveFlushSkips);
       }
       return;
@@ -262,14 +261,38 @@ public class DucklakeSinkTask extends SinkTask {
 
   /** Check all partitions and flush those that have exceeded thresholds */
   private void checkAndFlush() {
+    // Check for global memory pressure from Arrow allocator
+    long allocatedMemory = allocator.getAllocatedMemory();
+    long totalEstimatedBytes = buffers.values().stream().mapToLong(b -> b.estimatedBytes).sum();
+    boolean memoryPressure = allocatedMemory > fileSizeBytes * buffers.size();
+
+    if (memoryPressure) {
+      LOG.warn(
+          "Memory pressure detected: allocatorBytes={}, totalEstimatedBytes={}, threshold={}",
+          allocatedMemory,
+          totalEstimatedBytes,
+          fileSizeBytes * buffers.size());
+    }
+
     for (Map.Entry<TopicPartition, PartitionBuffer> entry : buffers.entrySet()) {
       PartitionBuffer buffer = entry.getValue();
-      if (buffer.shouldFlush(flushSize, fileSizeBytes, flushIntervalMs)) {
+      // Flush if normal thresholds exceeded OR if under memory pressure with data buffered
+      boolean shouldFlush =
+          buffer.shouldFlush(flushSize, fileSizeBytes, flushIntervalMs)
+              || (memoryPressure && !buffer.pendingBatches.isEmpty());
+
+      if (shouldFlush) {
         TopicPartition partition = entry.getKey();
-        String reason =
-            buffer.recordCount >= flushSize
-                ? "record count"
-                : buffer.estimatedBytes >= fileSizeBytes ? "file size" : "time interval";
+        String reason;
+        if (memoryPressure && !buffer.shouldFlush(flushSize, fileSizeBytes, flushIntervalMs)) {
+          reason = "memory pressure";
+        } else if (buffer.recordCount >= flushSize) {
+          reason = "record count";
+        } else if (buffer.estimatedBytes >= fileSizeBytes) {
+          reason = "file size";
+        } else {
+          reason = "time interval";
+        }
         LOG.info(
             "Flush triggered for partition {} (reason={}, records={}, bytes={})",
             partition,
@@ -295,12 +318,14 @@ public class DucklakeSinkTask extends SinkTask {
       return;
     }
 
+    long actualAllocatedBytes = allocator.getAllocatedMemory();
     LOG.info(
-        "Flushing partition {}: {} batches, {} records, {} bytes",
+        "Flushing partition {}: {} batches, {} records, estimatedBytes={}, allocatorBytes={}",
         partition,
         buffer.pendingBatches.size(),
         buffer.recordCount,
-        buffer.estimatedBytes);
+        buffer.estimatedBytes,
+        actualAllocatedBytes);
 
     // Write each buffered batch
     for (VectorSchemaRoot root : buffer.pendingBatches) {
