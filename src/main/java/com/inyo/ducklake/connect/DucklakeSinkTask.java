@@ -33,9 +33,11 @@ import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class DucklakeSinkTask extends SinkTask {
-  private static final System.Logger LOG = System.getLogger(String.valueOf(DucklakeSinkTask.class));
+  private static final Logger LOG = LoggerFactory.getLogger(DucklakeSinkTask.class);
   private DucklakeSinkConfig config;
   private DucklakeConnectionFactory connectionFactory;
   private DucklakeWriterFactory writerFactory;
@@ -123,9 +125,8 @@ public class DucklakeSinkTask extends SinkTask {
     this.flushIntervalMs = config.getFlushIntervalMs();
     this.fileSizeBytes = config.getFileSizeBytes();
 
-    LOG.log(
-        System.Logger.Level.INFO,
-        "Buffering config: flushSize={0}, flushIntervalMs={1}, fileSizeBytes={2}",
+    LOG.info(
+        "Buffering config: flushSize={}, flushIntervalMs={}, fileSizeBytes={}",
         flushSize,
         flushIntervalMs,
         fileSizeBytes);
@@ -168,9 +169,8 @@ public class DucklakeSinkTask extends SinkTask {
         if (!buffer.pendingBatches.isEmpty()
             && (now - buffer.lastFlushTime) >= flushIntervalMs) {
           TopicPartition partition = entry.getKey();
-          LOG.log(
-              System.Logger.Level.INFO,
-              "Time-based flush triggered for partition {0} (age={1}ms, records={2}, bytes={3})",
+          LOG.info(
+              "Time-based flush triggered for partition {} (age={}ms, records={}, bytes={})",
               partition,
               now - buffer.lastFlushTime,
               buffer.recordCount,
@@ -179,7 +179,7 @@ public class DucklakeSinkTask extends SinkTask {
         }
       }
     } catch (Exception e) {
-      LOG.log(System.Logger.Level.WARNING, "Error during time-based flush check: {0}", e.getMessage());
+      LOG.warn("Error during time-based flush check: {}", e.getMessage());
     } finally {
       flushLock.unlock();
     }
@@ -200,7 +200,7 @@ public class DucklakeSinkTask extends SinkTask {
         DucklakeWriter writer = writerFactory.create(partition.topic());
         writers.put(partition, writer);
         buffers.put(partition, new PartitionBuffer());
-        LOG.log(System.Logger.Level.INFO, "Created writer and buffer for partition: {0}", partition);
+        LOG.info("Created writer and buffer for partition: {}", partition);
       }
     } catch (SQLException e) {
       throw new RuntimeException("Failed to create writers for partitions", e);
@@ -253,7 +253,7 @@ public class DucklakeSinkTask extends SinkTask {
           sb.append(',');
         }
       }
-      LOG.log(System.Logger.Level.ERROR, sb.toString(), e);
+      LOG.error(sb.toString(), e);
       throw new RuntimeException("Failed to process sink records", e);
     } finally {
       flushLock.unlock();
@@ -270,9 +270,8 @@ public class DucklakeSinkTask extends SinkTask {
             buffer.recordCount >= flushSize
                 ? "record count"
                 : buffer.estimatedBytes >= fileSizeBytes ? "file size" : "time interval";
-        LOG.log(
-            System.Logger.Level.INFO,
-            "Flush triggered for partition {0} (reason={1}, records={2}, bytes={3})",
+        LOG.info(
+            "Flush triggered for partition {} (reason={}, records={}, bytes={})",
             partition,
             reason,
             buffer.recordCount,
@@ -291,14 +290,13 @@ public class DucklakeSinkTask extends SinkTask {
 
     DucklakeWriter writer = writers.get(partition);
     if (writer == null) {
-      LOG.log(System.Logger.Level.WARNING, "No writer found for partition: {0}", partition);
+      LOG.warn("No writer found for partition: {}", partition);
       buffer.clear();
       return;
     }
 
-    LOG.log(
-        System.Logger.Level.INFO,
-        "Flushing partition {0}: {1} batches, {2} records, {3} bytes",
+    LOG.info(
+        "Flushing partition {}: {} batches, {} records, {} bytes",
         partition,
         buffer.pendingBatches.size(),
         buffer.recordCount,
@@ -309,10 +307,7 @@ public class DucklakeSinkTask extends SinkTask {
       try {
         writer.write(root);
       } catch (Exception e) {
-        LOG.log(
-            System.Logger.Level.ERROR,
-            "Failed to write buffered data for partition: " + partition,
-            e);
+        LOG.error("Failed to write buffered data for partition: {}", partition, e);
         // Clear buffer to avoid memory leaks even on failure
         buffer.clear();
         throw new RuntimeException("Failed to flush buffered data", e);
@@ -320,10 +315,7 @@ public class DucklakeSinkTask extends SinkTask {
         try {
           root.close();
         } catch (Exception closeEx) {
-          LOG.log(
-              System.Logger.Level.WARNING,
-              "Failed to close VectorSchemaRoot: {0}",
-              closeEx.getMessage());
+          LOG.warn("Failed to close VectorSchemaRoot: {}", closeEx.getMessage());
         }
       }
     }
@@ -337,7 +329,7 @@ public class DucklakeSinkTask extends SinkTask {
 
   /** Buffer records that contain VectorSchemaRoot objects (from Arrow IPC converter) */
   private void bufferArrowIpcRecords(Collection<SinkRecord> records) {
-    LOG.log(System.Logger.Level.DEBUG, "Buffering {0} Arrow IPC records", records.size());
+    LOG.debug("Buffering {} Arrow IPC records", records.size());
 
     // Group Arrow IPC records by partition
     Map<TopicPartition, List<VectorSchemaRoot>> vectorsByPartition = new HashMap<>();
@@ -347,9 +339,8 @@ public class DucklakeSinkTask extends SinkTask {
         TopicPartition partition = new TopicPartition(record.topic(), record.kafkaPartition());
         vectorsByPartition.computeIfAbsent(partition, k -> new ArrayList<>()).add(vectorSchemaRoot);
       } else {
-        LOG.log(
-            System.Logger.Level.WARNING,
-            "Mixed data types detected - record value is not VectorSchemaRoot: {0}",
+        LOG.warn(
+            "Mixed data types detected - record value is not VectorSchemaRoot: {}",
             record.value().getClass().getName());
       }
     }
@@ -361,7 +352,7 @@ public class DucklakeSinkTask extends SinkTask {
 
       PartitionBuffer buffer = buffers.get(partition);
       if (buffer == null) {
-        LOG.log(System.Logger.Level.WARNING, "No buffer found for partition: {0}", partition);
+        LOG.warn("No buffer found for partition: {}", partition);
         // Close VectorSchemaRoot objects if no buffer
         for (VectorSchemaRoot root : vectorRoots) {
           try {
@@ -381,7 +372,7 @@ public class DucklakeSinkTask extends SinkTask {
 
   /** Buffer traditional Kafka Connect records using the existing converter */
   private void bufferTraditionalRecords(Collection<SinkRecord> records) {
-    LOG.log(System.Logger.Level.DEBUG, "Buffering {0} traditional records", records.size());
+    LOG.debug("Buffering {} traditional records", records.size());
 
     // Group records by topic-partition
     Map<TopicPartition, List<SinkRecord>> recordsByPartition =
@@ -398,7 +389,7 @@ public class DucklakeSinkTask extends SinkTask {
 
       PartitionBuffer buffer = buffers.get(partition);
       if (buffer == null) {
-        LOG.log(System.Logger.Level.WARNING, "No buffer found for partition: {0}", partition);
+        LOG.warn("No buffer found for partition: {}", partition);
         try {
           vectorSchemaRoot.close();
         } catch (Exception e) {
@@ -413,7 +404,7 @@ public class DucklakeSinkTask extends SinkTask {
 
   @Override
   public void stop() {
-    LOG.log(System.Logger.Level.INFO, "Stopping DucklakeSinkTask, flushing remaining buffers...");
+    LOG.info("Stopping DucklakeSinkTask, flushing remaining buffers...");
 
     // Stop the flush scheduler
     if (flushScheduler != null) {
@@ -435,11 +426,7 @@ public class DucklakeSinkTask extends SinkTask {
         try {
           flushPartition(partition);
         } catch (Exception e) {
-          LOG.log(
-              System.Logger.Level.WARNING,
-              "Failed to flush partition {0} during stop: {1}",
-              partition,
-              e.getMessage());
+          LOG.warn("Failed to flush partition {} during stop: {}", partition, e.getMessage());
         }
       }
       buffers.clear();
@@ -453,17 +440,17 @@ public class DucklakeSinkTask extends SinkTask {
           try {
             w.close();
           } catch (Exception e) {
-            LOG.log(System.Logger.Level.WARNING, "Failed closing writer: {0}", e.getMessage());
+            LOG.warn("Failed closing writer: {}", e.getMessage());
           }
         }
         writers.clear();
-        LOG.log(System.Logger.Level.INFO, "Cleared all writers");
+        LOG.info("Cleared all writers");
       }
       if (converter != null) {
         try {
           converter.close();
         } catch (Exception e) {
-          LOG.log(System.Logger.Level.WARNING, "Failed closing converter: {0}", e.getMessage());
+          LOG.warn("Failed closing converter: {}", e.getMessage());
         }
       }
       if (allocator != null) {

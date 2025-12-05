@@ -22,6 +22,8 @@ import java.util.Map;
 import javax.annotation.Nonnull;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class TopicToTableValidator implements ConfigDef.Validator {
 
@@ -30,8 +32,7 @@ public class TopicToTableValidator implements ConfigDef.Validator {
    * href="https://github.com/Altinity/clickhouse-sink-connector">clickhouse-sink-connector</a>
    * Licensed under the Apache License, Version 2.0
    */
-  private static final System.Logger LOG =
-      System.getLogger(String.valueOf(TopicToTableValidator.class));
+  private static final Logger LOG = LoggerFactory.getLogger(TopicToTableValidator.class);
 
   /** Default constructor for the TopicToTableValidator class. */
   public TopicToTableValidator() {}
@@ -113,8 +114,7 @@ public class TopicToTableValidator implements ConfigDef.Validator {
       String[] tt = str.split(":");
 
       if (tt.length != 2 || tt[0].trim().isEmpty() || tt[1].trim().isEmpty()) {
-        LOG.log(
-            System.Logger.Level.ERROR, "Invalid {} config format: {}", TOPICS_TABLES_MAP, input);
+        LOG.error("Invalid {} config format: {}", TOPICS_TABLES_MAP, input);
         isInvalid = true;
         continue;
       }
@@ -123,22 +123,20 @@ public class TopicToTableValidator implements ConfigDef.Validator {
       String table = tt[1].trim();
 
       if (!isValidTable(table)) {
-        LOG.log(
-            System.Logger.Level.ERROR,
-            "table name {} should have at least 1 "
-                + "character, start with _a-zA-Z, and only contains "
-                + "_a-zA-z0-9- (hyphens allowed)",
+        LOG.error(
+            "table name {} should have at least 1 character, start with _a-zA-Z, "
+                + "and only contains _a-zA-z0-9- (hyphens allowed)",
             table);
         isInvalid = true;
       }
 
       if (topic2Table.containsKey(topic)) {
-        LOG.log(System.Logger.Level.ERROR, "topic name {} is duplicated", topic);
+        LOG.error("topic name {} is duplicated", topic);
         isInvalid = true;
       }
 
       if (topic2Table.containsValue(table)) {
-        LOG.log(System.Logger.Level.ERROR, "table name {} is duplicated", table);
+        LOG.error("table name {} is duplicated", table);
         isInvalid = true;
       }
       topic2Table.put(tt[0].trim(), tt[1].trim());
