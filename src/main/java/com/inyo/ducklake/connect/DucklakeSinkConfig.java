@@ -20,6 +20,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.OptionalInt;
 import java.util.Set;
+import java.util.regex.Pattern;
 import org.apache.kafka.common.config.AbstractConfig;
 import org.apache.kafka.common.config.ConfigDef;
 import org.apache.kafka.common.config.ConfigException;
@@ -28,6 +29,11 @@ public class DucklakeSinkConfig extends AbstractConfig {
 
   /** This class used iceberg-kafka-connect as reference implementation */
   public static final String VERSION = "1.0.0";
+
+  // Data path validation patterns
+  private static final Pattern S3_PATH_PATTERN = Pattern.compile("^s3a?://[a-zA-Z0-9._-]+(/.*)?$");
+  private static final Pattern GCS_PATH_PATTERN = Pattern.compile("^gs://[a-zA-Z0-9._-]+(/.*)?$");
+  private static final Pattern LOCAL_PATH_PATTERN = Pattern.compile("^file:///.+$");
 
   public static final String DUCKLAKE_CATALOG_URI = "ducklake.catalog_uri";
   public static final String DATA_INLINING_ROW_LIMIT = "data.inlining.row.limit";
@@ -77,6 +83,8 @@ public class DucklakeSinkConfig extends AbstractConfig {
         .define(
             DATA_PATH,
             ConfigDef.Type.STRING,
+            ConfigDef.NO_DEFAULT_VALUE,
+            new DataPathValidator(),
             ConfigDef.Importance.HIGH,
             "Data path in the format eg s3://my-bucket/path/, gs://my-bucket/path/, file:///path/")
         .define(
@@ -338,5 +346,38 @@ public class DucklakeSinkConfig extends AbstractConfig {
       out.put(String.valueOf(e.getKey()), e.getValue() != null ? String.valueOf(e.getValue()) : "");
     }
     return out;
+  }
+
+  /** Validator for data path configuration (S3, GCS, or local file paths). */
+  static class DataPathValidator implements ConfigDef.Validator {
+    @Override
+    public void ensureValid(String name, Object value) {
+      if (value == null) {
+        throw new ConfigException(name, null, "Data path is required");
+      }
+      String path = value.toString().trim();
+      if (path.isEmpty()) {
+        throw new ConfigException(name, value, "Data path cannot be empty");
+      }
+
+      boolean isValidPath =
+          S3_PATH_PATTERN.matcher(path).matches()
+              || GCS_PATH_PATTERN.matcher(path).matches()
+              || LOCAL_PATH_PATTERN.matcher(path).matches();
+
+      if (!isValidPath) {
+        throw new ConfigException(
+            name,
+            value,
+            "Invalid data path format. Expected one of: "
+                + "s3://bucket-name/path, s3a://bucket-name/path, "
+                + "gs://bucket-name/path, or file:///absolute/path");
+      }
+    }
+
+    @Override
+    public String toString() {
+      return "Valid data path (s3://, s3a://, gs://, or file:///)";
+    }
   }
 }
