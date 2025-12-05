@@ -43,6 +43,11 @@ public class DucklakeSinkConfig extends AbstractConfig {
   static final String S3_SECRET_ACCESS_KEY = "s3.secret_access_key";
   static final String CONSUMER_OVERRIDE_MAX_POLL_RECORDS = "consumer.override.max.poll.records";
 
+  // Buffering configuration for larger file sizes
+  public static final String FLUSH_SIZE = "flush.size";
+  public static final String FLUSH_INTERVAL_MS = "flush.interval.ms";
+  public static final String FILE_SIZE_BYTES = "file.size.bytes";
+
   // Table-specific configuration property patterns
   static final String TABLE_ID_COLUMNS_PATTERN = "ducklake.table.%s.id-columns";
   static final String TABLE_PARTITION_BY_PATTERN = "ducklake.table.%s.partition-by";
@@ -101,7 +106,28 @@ public class DucklakeSinkConfig extends AbstractConfig {
             ConfigDef.Type.INT,
             1024,
             ConfigDef.Importance.MEDIUM,
-            "Maximum number of records returned in a single call to poll(). Defaults to 1024 if not specified.");
+            "Maximum number of records returned in a single call to poll(). Defaults to 1024 if not specified.")
+        .define(
+            FLUSH_SIZE,
+            ConfigDef.Type.INT,
+            1000000,
+            ConfigDef.Importance.MEDIUM,
+            "Number of records to buffer before writing to DuckLake. "
+                + "Larger values produce larger files but use more memory. Default: 1000000 (1M records)")
+        .define(
+            FLUSH_INTERVAL_MS,
+            ConfigDef.Type.LONG,
+            60000L,
+            ConfigDef.Importance.MEDIUM,
+            "Maximum time in milliseconds to buffer records before forcing a flush. "
+                + "Ensures data is written even with low throughput. Default: 60000 (60 seconds)")
+        .define(
+            FILE_SIZE_BYTES,
+            ConfigDef.Type.LONG,
+            268435456L,
+            ConfigDef.Importance.MEDIUM,
+            "Target file size in bytes before flushing the buffer. "
+                + "Default: 268435456 (256MB). Set to 536870912 for 512MB files.");
   }
 
   public DucklakeSinkConfig(ConfigDef definition, Map<?, ?> originals) {
@@ -141,7 +167,33 @@ public class DucklakeSinkConfig extends AbstractConfig {
   }
 
   /**
-   * Returns the configured data inlining row limit.
+   * Returns the number of records to buffer before writing to DuckLake.
+   *
+   * @return flush size in number of records, default 1000000 (1M records)
+   */
+  public int getFlushSize() {
+    return getInt(FLUSH_SIZE);
+  }
+
+  /**
+   * Returns the maximum time to buffer records before forcing a flush.
+   *
+   * @return flush interval in milliseconds, default 60000 (60 seconds)
+   */
+  public long getFlushIntervalMs() {
+    return getLong(FLUSH_INTERVAL_MS);
+  }
+
+  /**
+   * Returns the target file size in bytes before flushing the buffer.
+   *
+   * @return file size in bytes, default 268435456 (256MB)
+   */
+  public long getFileSizeBytes() {
+    return getLong(FILE_SIZE_BYTES);
+  }
+
+  /**
    *
    * <p>Default is 'off' (data inlining disabled). If value is the string "off" (case-insensitive),
    * data inlining is disabled and an empty OptionalInt is returned.
