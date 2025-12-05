@@ -65,6 +65,12 @@ public final class IntegrationTestUtils {
     if (idColumns != null && !idColumns.isBlank()) {
       cfg.put("ducklake.table." + tableName + ".id-columns", idColumns);
     }
+
+    // Set low flush thresholds for integration tests to avoid waiting for default 60s interval
+    cfg.put(DucklakeSinkConfig.FLUSH_SIZE, "1");
+    cfg.put(DucklakeSinkConfig.FLUSH_INTERVAL_MS, "1000");
+    cfg.put(DucklakeSinkConfig.FILE_SIZE_BYTES, "1024");
+
     return cfg;
   }
 
@@ -86,6 +92,12 @@ public final class IntegrationTestUtils {
     if (idColumns != null && !idColumns.isBlank()) {
       cfg.put("ducklake.table." + tableName + ".id-columns", idColumns);
     }
+
+    // Set low flush thresholds for integration tests to avoid waiting for default 60s interval
+    cfg.put(DucklakeSinkConfig.FLUSH_SIZE, "1");
+    cfg.put(DucklakeSinkConfig.FLUSH_INTERVAL_MS, "1000");
+    cfg.put(DucklakeSinkConfig.FILE_SIZE_BYTES, "1024");
+
     return cfg;
   }
 
