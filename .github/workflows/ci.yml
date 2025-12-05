@@ -252,18 +252,8 @@ jobs:
         run: ./gradlew dependencyCheckAnalyze || true
         continue-on-error: true
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: java
-
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:java"
+      # CodeQL analysis is handled by GitHub's default setup
+      # Remove advanced CodeQL steps to avoid conflict with default setup
 
   dependency-review:
     name: Dependency Review
