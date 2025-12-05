@@ -20,11 +20,13 @@ import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Utility class for timestamp detection and conversion */
 public final class TimestampUtils {
 
-  private static final System.Logger LOG = System.getLogger(TimestampUtils.class.getName());
+  private static final Logger LOG = LoggerFactory.getLogger(TimestampUtils.class);
 
   private static final Pattern ISO8601_PATTERN =
       Pattern.compile(
@@ -87,11 +89,7 @@ public final class TimestampUtils {
         }
       }
     } catch (DateTimeParseException e) {
-      LOG.log(
-          System.Logger.Level.WARNING,
-          "Failed to parse timestamp: {0}, error: {1}",
-          trimmed,
-          e.getMessage());
+      LOG.warn("Failed to parse timestamp: {}, error: {}", trimmed, e.getMessage());
       throw new IllegalArgumentException("Invalid timestamp format: " + trimmed, e);
     }
   }
