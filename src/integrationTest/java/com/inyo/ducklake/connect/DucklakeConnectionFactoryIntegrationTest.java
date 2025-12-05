@@ -29,7 +29,7 @@ public class DucklakeConnectionFactoryIntegrationTest {
       props.put(DucklakeSinkConfig.DUCKLAKE_CATALOG_URI, "testcatalog");
     }
     if (!props.containsKey(DucklakeSinkConfig.DATA_PATH)) {
-      props.put(DucklakeSinkConfig.DATA_PATH, "/tmp/data");
+      props.put(DucklakeSinkConfig.DATA_PATH, "file:///tmp/data");
     }
     if (!props.containsKey(DucklakeSinkConfig.S3_URL_STYLE)) {
       props.put(DucklakeSinkConfig.S3_URL_STYLE, "path");
