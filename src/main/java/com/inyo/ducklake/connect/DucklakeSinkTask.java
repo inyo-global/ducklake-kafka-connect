@@ -69,8 +69,7 @@ public class DucklakeSinkTask extends SinkTask {
       pendingBatches.add(root);
       recordCount += root.getRowCount();
       // Estimate bytes from Arrow buffer sizes
-      estimatedBytes +=
-          root.getFieldVectors().stream().mapToLong(v -> v.getBufferSize()).sum();
+      estimatedBytes += root.getFieldVectors().stream().mapToLong(v -> v.getBufferSize()).sum();
     }
 
     void clear() {
@@ -132,11 +131,13 @@ public class DucklakeSinkTask extends SinkTask {
         fileSizeBytes);
 
     // Start scheduled flush checker (runs every 1 second to check time-based flush)
-    this.flushScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-      Thread t = new Thread(r, "ducklake-flush-scheduler");
-      t.setDaemon(true);
-      return t;
-    });
+    this.flushScheduler =
+        Executors.newSingleThreadScheduledExecutor(
+            r -> {
+              Thread t = new Thread(r, "ducklake-flush-scheduler");
+              t.setDaemon(true);
+              return t;
+            });
     flushScheduler.scheduleAtFixedRate(this::checkTimeBasedFlush, 1, 1, TimeUnit.SECONDS);
   }
 
@@ -165,8 +166,7 @@ public class DucklakeSinkTask extends SinkTask {
       long now = System.currentTimeMillis();
       for (Map.Entry<TopicPartition, PartitionBuffer> entry : buffers.entrySet()) {
         PartitionBuffer buffer = entry.getValue();
-        if (!buffer.pendingBatches.isEmpty()
-            && (now - buffer.lastFlushTime) >= flushIntervalMs) {
+        if (!buffer.pendingBatches.isEmpty() && (now - buffer.lastFlushTime) >= flushIntervalMs) {
           TopicPartition partition = entry.getKey();
           LOG.info(
               "Time-based flush triggered for partition {} (age={}ms, records={}, bytes={})",

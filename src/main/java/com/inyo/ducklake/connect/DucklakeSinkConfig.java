@@ -202,8 +202,7 @@ public class DucklakeSinkConfig extends AbstractConfig {
   }
 
   /**
-   *
-   * <p>Default is 'off' (data inlining disabled). If value is the string "off" (case-insensitive),
+   * Default is 'off' (data inlining disabled). If value is the string "off" (case-insensitive),
    * data inlining is disabled and an empty OptionalInt is returned.
    */
   public OptionalInt getDataInliningRowLimit() {
