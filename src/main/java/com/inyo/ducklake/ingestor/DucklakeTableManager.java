@@ -75,8 +75,10 @@ public final class DucklakeTableManager {
    */
   public boolean ensureTable(Schema arrowSchema) throws SQLException {
     final var table = config.destinationTable();
-    // Get or create a lock specific to this table, allowing concurrent operations on different tables
-    Object tableLock = TABLE_LOCKS.computeIfAbsent(table.toLowerCase(Locale.ROOT), k -> new Object());
+    // Get or create a lock specific to this table, allowing concurrent operations on different
+    // tables
+    Object tableLock =
+        TABLE_LOCKS.computeIfAbsent(table.toLowerCase(Locale.ROOT), k -> new Object());
 
     synchronized (tableLock) {
       final var tableExisted = tableExists(table);
