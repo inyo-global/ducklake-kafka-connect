@@ -25,6 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
@@ -40,7 +41,9 @@ import org.slf4j.LoggerFactory;
 public final class DucklakeTableManager {
 
   private static final Logger LOG = LoggerFactory.getLogger(DucklakeTableManager.class);
-  private static final Object LOCK = new Object();
+
+  // Per-table locks to allow concurrent operations on different tables
+  private static final ConcurrentHashMap<String, Object> TABLE_LOCKS = new ConcurrentHashMap<>();
 
   private final DuckDBConnection connection;
   private final DucklakeWriterConfig config;
@@ -71,8 +74,13 @@ public final class DucklakeTableManager {
    * @return true if the table existed before this operation, false if it was created
    */
   public boolean ensureTable(Schema arrowSchema) throws SQLException {
-    synchronized (LOCK) {
-      final var table = config.destinationTable();
+    final var table = config.destinationTable();
+    // Get or create a lock specific to this table, allowing concurrent operations on different
+    // tables
+    Object tableLock =
+        TABLE_LOCKS.computeIfAbsent(table.toLowerCase(Locale.ROOT), k -> new Object());
+
+    synchronized (tableLock) {
       final var tableExisted = tableExists(table);
       if (!tableExisted) {
         if (!config.autoCreateTable()) {
