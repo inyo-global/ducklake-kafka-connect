@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
@@ -54,7 +55,7 @@ public class DucklakeSinkTask extends SinkTask {
   private final ReentrantLock flushLock = new ReentrantLock();
 
   // Track skipped time-based flushes to ensure they eventually happen
-  private volatile int consecutiveFlushSkips = 0;
+  private final AtomicInteger consecutiveFlushSkips = new AtomicInteger(0);
   private static final int MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING = 5;
   private static final long FLUSH_LOCK_TIMEOUT_MS = 100;
 
@@ -152,17 +153,17 @@ public class DucklakeSinkTask extends SinkTask {
     }
 
     if (!lockAcquired) {
-      consecutiveFlushSkips++;
-      if (consecutiveFlushSkips >= MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING) {
+      int skips = consecutiveFlushSkips.incrementAndGet();
+      if (skips >= MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING) {
         LOG.warn(
             "Time-based flush check skipped {} consecutive times - lock contention may delay flushes",
-            consecutiveFlushSkips);
+            skips);
       }
       return;
     }
 
     try {
-      consecutiveFlushSkips = 0; // Reset on successful lock acquisition
+      consecutiveFlushSkips.set(0); // Reset on successful lock acquisition
       long now = System.currentTimeMillis();
       for (Map.Entry<TopicPartition, PartitionBuffer> entry : buffers.entrySet()) {
         PartitionBuffer buffer = entry.getValue();
