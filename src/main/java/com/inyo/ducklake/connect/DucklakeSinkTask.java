@@ -51,6 +51,11 @@ public class DucklakeSinkTask extends SinkTask {
   private ScheduledExecutorService flushScheduler;
   private final ReentrantLock flushLock = new ReentrantLock();
 
+  // Track skipped time-based flushes to ensure they eventually happen
+  private volatile int consecutiveFlushSkips = 0;
+  private static final int MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING = 5;
+  private static final long FLUSH_LOCK_TIMEOUT_MS = 100;
+
   /** Per-partition buffer to accumulate records before writing */
   private static class PartitionBuffer {
     final List<VectorSchemaRoot> pendingBatches = new ArrayList<>();
@@ -136,11 +141,27 @@ public class DucklakeSinkTask extends SinkTask {
 
   /** Periodic check for time-based flush */
   private void checkTimeBasedFlush() {
-    if (!flushLock.tryLock()) {
-      // Another flush is in progress, skip this check
+    boolean lockAcquired = false;
+    try {
+      lockAcquired = flushLock.tryLock(FLUSH_LOCK_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
       return;
     }
+
+    if (!lockAcquired) {
+      consecutiveFlushSkips++;
+      if (consecutiveFlushSkips >= MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING) {
+        LOG.log(
+            System.Logger.Level.WARNING,
+            "Time-based flush check skipped {0} consecutive times - lock contention may delay flushes",
+            consecutiveFlushSkips);
+      }
+      return;
+    }
+
     try {
+      consecutiveFlushSkips = 0; // Reset on successful lock acquisition
       long now = System.currentTimeMillis();
       for (Map.Entry<TopicPartition, PartitionBuffer> entry : buffers.entrySet()) {
         PartitionBuffer buffer = entry.getValue();
