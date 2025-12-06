@@ -23,9 +23,9 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
@@ -176,7 +176,7 @@ public class DucklakeSinkTask extends SinkTask {
         int skipCount = skips.incrementAndGet();
         if (skipCount >= MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING) {
           LOG.warn(
-              "Time-based flush check for partition {} skipped {} consecutive times - lock contention may delay flushes",
+              "Flush check for partition {} skipped {} times - possible lock contention",
               partition,
               skipCount);
         }
@@ -250,7 +250,8 @@ public class DucklakeSinkTask extends SinkTask {
       try {
         // Detect if we have Arrow IPC data (VectorSchemaRoot) or traditional data
         boolean hasArrowIpcData =
-            partitionRecords.stream().anyMatch(record -> record.value() instanceof VectorSchemaRoot);
+            partitionRecords.stream()
+                .anyMatch(record -> record.value() instanceof VectorSchemaRoot);
 
         if (hasArrowIpcData) {
           bufferArrowIpcRecordsForPartition(partition, partitionRecords);
