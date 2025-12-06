@@ -23,6 +23,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -52,10 +53,14 @@ public class DucklakeSinkTask extends SinkTask {
   private long flushIntervalMs;
   private long fileSizeBytes;
   private ScheduledExecutorService flushScheduler;
-  private final ReentrantLock flushLock = new ReentrantLock();
 
-  // Track skipped time-based flushes to ensure they eventually happen
-  private final AtomicInteger consecutiveFlushSkips = new AtomicInteger(0);
+  // Per-partition locks to allow parallel processing across partitions
+  private final ConcurrentHashMap<TopicPartition, ReentrantLock> partitionLocks =
+      new ConcurrentHashMap<>();
+
+  // Track skipped time-based flushes per partition
+  private final ConcurrentHashMap<TopicPartition, AtomicInteger> consecutiveFlushSkips =
+      new ConcurrentHashMap<>();
   private static final int MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING = 5;
   private static final long FLUSH_LOCK_TIMEOUT_MS = 100;
 
@@ -142,33 +147,48 @@ public class DucklakeSinkTask extends SinkTask {
     flushScheduler.scheduleAtFixedRate(this::checkTimeBasedFlush, 1, 1, TimeUnit.SECONDS);
   }
 
-  /** Periodic check for time-based flush */
+  /** Periodic check for time-based flush - uses per-partition locking */
   private void checkTimeBasedFlush() {
-    boolean lockAcquired = false;
-    try {
-      lockAcquired = flushLock.tryLock(FLUSH_LOCK_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      return;
-    }
+    long now = System.currentTimeMillis();
 
-    if (!lockAcquired) {
-      int skips = consecutiveFlushSkips.incrementAndGet();
-      if (skips >= MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING) {
-        LOG.warn(
-            "Time-based flush check skipped {} consecutive times - lock contention may delay flushes",
-            skips);
+    for (Map.Entry<TopicPartition, PartitionBuffer> entry : buffers.entrySet()) {
+      TopicPartition partition = entry.getKey();
+      PartitionBuffer buffer = entry.getValue();
+
+      // Skip if buffer is empty or not due for flush
+      if (buffer.pendingBatches.isEmpty() || (now - buffer.lastFlushTime) < flushIntervalMs) {
+        continue;
       }
-      return;
-    }
 
-    try {
-      consecutiveFlushSkips.set(0); // Reset on successful lock acquisition
-      long now = System.currentTimeMillis();
-      for (Map.Entry<TopicPartition, PartitionBuffer> entry : buffers.entrySet()) {
-        PartitionBuffer buffer = entry.getValue();
+      // Try to acquire per-partition lock
+      ReentrantLock lock = partitionLocks.computeIfAbsent(partition, k -> new ReentrantLock());
+      boolean lockAcquired = false;
+      try {
+        lockAcquired = lock.tryLock(FLUSH_LOCK_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return;
+      }
+
+      if (!lockAcquired) {
+        AtomicInteger skips =
+            consecutiveFlushSkips.computeIfAbsent(partition, k -> new AtomicInteger(0));
+        int skipCount = skips.incrementAndGet();
+        if (skipCount >= MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING) {
+          LOG.warn(
+              "Flush check for partition {} skipped {} times - possible lock contention",
+              partition,
+              skipCount);
+        }
+        continue;
+      }
+
+      try {
+        // Reset skip counter on successful lock acquisition
+        consecutiveFlushSkips.computeIfAbsent(partition, k -> new AtomicInteger(0)).set(0);
+
+        // Re-check condition under lock (double-check pattern)
         if (!buffer.pendingBatches.isEmpty() && (now - buffer.lastFlushTime) >= flushIntervalMs) {
-          TopicPartition partition = entry.getKey();
           LOG.info(
               "Time-based flush triggered for partition {} (age={}ms, records={}, bytes={})",
               partition,
@@ -177,11 +197,11 @@ public class DucklakeSinkTask extends SinkTask {
               buffer.estimatedBytes);
           flushPartition(partition);
         }
+      } catch (Exception e) {
+        LOG.warn("Error during time-based flush for partition {}: {}", partition, e.getMessage());
+      } finally {
+        lock.unlock();
       }
-    } catch (Exception e) {
-      LOG.warn("Error during time-based flush check: {}", e.getMessage());
-    } finally {
-      flushLock.unlock();
     }
   }
 
@@ -216,92 +236,106 @@ public class DucklakeSinkTask extends SinkTask {
       return;
     }
 
-    flushLock.lock();
-    try {
-      // Detect if we have Arrow IPC data (VectorSchemaRoot) or traditional data
-      boolean hasArrowIpcData =
-          records.stream().anyMatch(record -> record.value() instanceof VectorSchemaRoot);
+    // Group records by partition first (no lock needed)
+    Map<TopicPartition, List<SinkRecord>> recordsByPartition =
+        SinkRecordToArrowConverter.groupRecordsByPartition(records);
 
-      if (hasArrowIpcData) {
-        bufferArrowIpcRecords(records);
-      } else {
-        bufferTraditionalRecords(records);
-      }
+    // Process each partition with its own lock
+    for (Map.Entry<TopicPartition, List<SinkRecord>> entry : recordsByPartition.entrySet()) {
+      TopicPartition partition = entry.getKey();
+      List<SinkRecord> partitionRecords = entry.getValue();
 
-      // Check if any partition needs flushing
-      checkAndFlush();
-    } catch (Exception e) {
-      // Build a concise metadata sample for easier debugging (topic:partition@offset)
-      var sb = new StringBuilder();
-      sb.append("Error processing records. batchSize=")
-          .append(records.size())
-          .append(". sampleOffsets=");
-      var idx = 0;
-      for (SinkRecord r : records) {
-        var offset = String.valueOf(r.kafkaOffset());
-        sb.append("[")
-            .append(r.topic())
-            .append(":")
-            .append(r.kafkaPartition())
-            .append("@")
-            .append(offset)
-            .append("]");
-        if (++idx >= 10) {
-          sb.append("(truncated)");
-          break;
+      ReentrantLock lock = partitionLocks.computeIfAbsent(partition, k -> new ReentrantLock());
+      lock.lock();
+      try {
+        // Detect if we have Arrow IPC data (VectorSchemaRoot) or traditional data
+        boolean hasArrowIpcData =
+            partitionRecords.stream()
+                .anyMatch(record -> record.value() instanceof VectorSchemaRoot);
+
+        if (hasArrowIpcData) {
+          bufferArrowIpcRecordsForPartition(partition, partitionRecords);
         } else {
-          sb.append(',');
+          bufferTraditionalRecordsForPartition(partition, partitionRecords);
         }
+
+        // Check if this partition needs flushing
+        checkAndFlushPartition(partition);
+      } catch (Exception e) {
+        // Build a concise metadata sample for easier debugging (topic:partition@offset)
+        var sb = new StringBuilder();
+        sb.append("Error processing records for partition ")
+            .append(partition)
+            .append(". batchSize=")
+            .append(partitionRecords.size())
+            .append(". sampleOffsets=");
+        var idx = 0;
+        for (SinkRecord r : partitionRecords) {
+          var offset = String.valueOf(r.kafkaOffset());
+          sb.append("[")
+              .append(r.topic())
+              .append(":")
+              .append(r.kafkaPartition())
+              .append("@")
+              .append(offset)
+              .append("]");
+          if (++idx >= 10) {
+            sb.append("(truncated)");
+            break;
+          } else {
+            sb.append(',');
+          }
+        }
+        LOG.error(sb.toString(), e);
+        throw new RuntimeException("Failed to process sink records", e);
+      } finally {
+        lock.unlock();
       }
-      LOG.error(sb.toString(), e);
-      throw new RuntimeException("Failed to process sink records", e);
-    } finally {
-      flushLock.unlock();
     }
   }
 
-  /** Check all partitions and flush those that have exceeded thresholds */
-  private void checkAndFlush() {
+  /** Check a single partition and flush if thresholds exceeded (called under partition lock) */
+  private void checkAndFlushPartition(TopicPartition partition) {
+    PartitionBuffer buffer = buffers.get(partition);
+    if (buffer == null) {
+      return;
+    }
+
     // Check for global memory pressure from Arrow allocator
     long allocatedMemory = allocator.getAllocatedMemory();
-    long totalEstimatedBytes = buffers.values().stream().mapToLong(b -> b.estimatedBytes).sum();
     boolean memoryPressure = allocatedMemory > fileSizeBytes * buffers.size();
 
-    if (memoryPressure) {
+    if (memoryPressure && !buffer.pendingBatches.isEmpty()) {
       LOG.warn(
-          "Memory pressure detected: allocatorBytes={}, totalEstimatedBytes={}, threshold={}",
+          "Memory pressure detected for partition {}: allocatorBytes={}, threshold={}",
+          partition,
           allocatedMemory,
-          totalEstimatedBytes,
           fileSizeBytes * buffers.size());
     }
 
-    for (Map.Entry<TopicPartition, PartitionBuffer> entry : buffers.entrySet()) {
-      PartitionBuffer buffer = entry.getValue();
-      // Flush if normal thresholds exceeded OR if under memory pressure with data buffered
-      boolean shouldFlush =
-          buffer.shouldFlush(flushSize, fileSizeBytes, flushIntervalMs)
-              || (memoryPressure && !buffer.pendingBatches.isEmpty());
+    // Flush if normal thresholds exceeded OR if under memory pressure with data buffered
+    boolean shouldFlush =
+        buffer.shouldFlush(flushSize, fileSizeBytes, flushIntervalMs)
+            || (memoryPressure && !buffer.pendingBatches.isEmpty());
 
-      if (shouldFlush) {
-        TopicPartition partition = entry.getKey();
-        String reason;
-        if (memoryPressure && !buffer.shouldFlush(flushSize, fileSizeBytes, flushIntervalMs)) {
-          reason = "memory pressure";
-        } else if (buffer.recordCount >= flushSize) {
-          reason = "record count";
-        } else if (buffer.estimatedBytes >= fileSizeBytes) {
-          reason = "file size";
-        } else {
-          reason = "time interval";
-        }
-        LOG.info(
-            "Flush triggered for partition {} (reason={}, records={}, bytes={})",
-            partition,
-            reason,
-            buffer.recordCount,
-            buffer.estimatedBytes);
-        flushPartition(partition);
+    if (shouldFlush) {
+      String reason;
+      if (memoryPressure && !buffer.shouldFlush(flushSize, fileSizeBytes, flushIntervalMs)) {
+        reason = "memory pressure";
+      } else if (buffer.recordCount >= flushSize) {
+        reason = "record count";
+      } else if (buffer.estimatedBytes >= fileSizeBytes) {
+        reason = "file size";
+      } else {
+        reason = "time interval";
       }
+      LOG.info(
+          "Flush triggered for partition {} (reason={}, records={}, bytes={})",
+          partition,
+          reason,
+          buffer.recordCount,
+          buffer.estimatedBytes);
+      flushPartition(partition);
     }
   }
 
@@ -353,77 +387,58 @@ public class DucklakeSinkTask extends SinkTask {
     buffer.lastFlushTime = System.currentTimeMillis();
   }
 
-  /** Buffer records that contain VectorSchemaRoot objects (from Arrow IPC converter) */
-  private void bufferArrowIpcRecords(Collection<SinkRecord> records) {
-    LOG.debug("Buffering {} Arrow IPC records", records.size());
+  /** Buffer Arrow IPC records for a single partition (called under partition lock) */
+  private void bufferArrowIpcRecordsForPartition(
+      TopicPartition partition, List<SinkRecord> records) {
+    LOG.debug("Buffering {} Arrow IPC records for partition {}", records.size(), partition);
 
-    // Group Arrow IPC records by partition
-    Map<TopicPartition, List<VectorSchemaRoot>> vectorsByPartition = new HashMap<>();
-
-    for (SinkRecord record : records) {
-      if (record.value() instanceof VectorSchemaRoot vectorSchemaRoot) {
-        TopicPartition partition = new TopicPartition(record.topic(), record.kafkaPartition());
-        vectorsByPartition.computeIfAbsent(partition, k -> new ArrayList<>()).add(vectorSchemaRoot);
-      } else {
-        LOG.warn(
-            "Mixed data types detected - record value is not VectorSchemaRoot: {}",
-            record.value().getClass().getName());
-      }
-    }
-
-    // Add to buffers
-    for (Map.Entry<TopicPartition, List<VectorSchemaRoot>> entry : vectorsByPartition.entrySet()) {
-      TopicPartition partition = entry.getKey();
-      List<VectorSchemaRoot> vectorRoots = entry.getValue();
-
-      PartitionBuffer buffer = buffers.get(partition);
-      if (buffer == null) {
-        LOG.warn("No buffer found for partition: {}", partition);
-        // Close VectorSchemaRoot objects if no buffer
-        for (VectorSchemaRoot root : vectorRoots) {
+    PartitionBuffer buffer = buffers.get(partition);
+    if (buffer == null) {
+      LOG.warn("No buffer found for partition: {}", partition);
+      // Close VectorSchemaRoot objects if no buffer
+      for (SinkRecord record : records) {
+        if (record.value() instanceof VectorSchemaRoot root) {
           try {
             root.close();
           } catch (Exception e) {
             // Ignore
           }
         }
-        continue;
       }
+      return;
+    }
 
-      for (VectorSchemaRoot root : vectorRoots) {
-        buffer.add(root);
+    for (SinkRecord record : records) {
+      if (record.value() instanceof VectorSchemaRoot vectorSchemaRoot) {
+        buffer.add(vectorSchemaRoot);
+      } else {
+        LOG.warn(
+            "Mixed data types detected - record value is not VectorSchemaRoot: {}",
+            record.value().getClass().getName());
       }
     }
   }
 
-  /** Buffer traditional Kafka Connect records using the existing converter */
-  private void bufferTraditionalRecords(Collection<SinkRecord> records) {
-    LOG.debug("Buffering {} traditional records", records.size());
+  /** Buffer traditional records for a single partition (called under partition lock) */
+  private void bufferTraditionalRecordsForPartition(
+      TopicPartition partition, List<SinkRecord> records) {
+    LOG.debug("Buffering {} traditional records for partition {}", records.size(), partition);
 
-    // Group records by topic-partition
-    Map<TopicPartition, List<SinkRecord>> recordsByPartition =
-        SinkRecordToArrowConverter.groupRecordsByPartition(records);
+    PartitionBuffer buffer = buffers.get(partition);
+    if (buffer == null) {
+      LOG.warn("No buffer found for partition: {}", partition);
+      return;
+    }
 
-    // Convert records to VectorSchemaRoot for each partition
+    // Convert records for this single partition
+    Map<TopicPartition, List<SinkRecord>> singlePartitionMap = new HashMap<>();
+    singlePartitionMap.put(partition, records);
+
     Map<TopicPartition, VectorSchemaRoot> vectorsByPartition =
-        converter.convertRecordsByPartition(recordsByPartition);
+        converter.convertRecordsByPartition(singlePartitionMap);
 
-    // Add to buffers
-    for (Map.Entry<TopicPartition, VectorSchemaRoot> entry : vectorsByPartition.entrySet()) {
-      TopicPartition partition = entry.getKey();
-      VectorSchemaRoot vectorSchemaRoot = entry.getValue();
-
-      PartitionBuffer buffer = buffers.get(partition);
-      if (buffer == null) {
-        LOG.warn("No buffer found for partition: {}", partition);
-        try {
-          vectorSchemaRoot.close();
-        } catch (Exception e) {
-          // Ignore
-        }
-        continue;
-      }
-
+    VectorSchemaRoot vectorSchemaRoot = vectorsByPartition.get(partition);
+    if (vectorSchemaRoot != null) {
       buffer.add(vectorSchemaRoot);
     }
   }
@@ -445,20 +460,25 @@ public class DucklakeSinkTask extends SinkTask {
       }
     }
 
-    // Flush all remaining buffered data
-    flushLock.lock();
-    try {
-      for (TopicPartition partition : buffers.keySet()) {
-        try {
-          flushPartition(partition);
-        } catch (Exception e) {
-          LOG.warn("Failed to flush partition {} during stop: {}", partition, e.getMessage());
+    // Flush all remaining buffered data (acquire each partition lock)
+    for (TopicPartition partition : buffers.keySet()) {
+      ReentrantLock lock = partitionLocks.get(partition);
+      if (lock != null) {
+        lock.lock();
+      }
+      try {
+        flushPartition(partition);
+      } catch (Exception e) {
+        LOG.warn("Failed to flush partition {} during stop: {}", partition, e.getMessage());
+      } finally {
+        if (lock != null) {
+          lock.unlock();
         }
       }
-      buffers.clear();
-    } finally {
-      flushLock.unlock();
     }
+    buffers.clear();
+    partitionLocks.clear();
+    consecutiveFlushSkips.clear();
 
     try {
       if (writers != null) {

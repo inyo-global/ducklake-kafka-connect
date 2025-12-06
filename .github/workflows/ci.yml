@@ -177,7 +177,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: build/reports/spotbugs/sarif.sarif
+          sarif_file: build/reports/spotbugs/
           category: spotbugs
 
   build:
