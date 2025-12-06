@@ -63,7 +63,7 @@ public class DucklakeSinkConfig extends AbstractConfig {
     return new ConfigDef()
         .define(
             DUCKLAKE_CATALOG_URI,
-            ConfigDef.Type.STRING,
+            ConfigDef.Type.PASSWORD,
             ConfigDef.Importance.HIGH,
             "Ducklake catalog URI, e.g., postgres:dbname=ducklake_catalog host=localhost")
         .define(
@@ -101,12 +101,12 @@ public class DucklakeSinkConfig extends AbstractConfig {
             "Specify a custom S3 endpoint")
         .define(
             S3_ACCESS_KEY_ID,
-            ConfigDef.Type.STRING,
+            ConfigDef.Type.PASSWORD,
             ConfigDef.Importance.HIGH,
             "The ID of the key to use")
         .define(
             S3_SECRET_ACCESS_KEY,
-            ConfigDef.Type.STRING,
+            ConfigDef.Type.PASSWORD,
             ConfigDef.Importance.HIGH,
             "The secret of the key to use")
         .define(
@@ -143,7 +143,7 @@ public class DucklakeSinkConfig extends AbstractConfig {
   }
 
   public String getDucklakeCatalogUri() {
-    return getString(DUCKLAKE_CATALOG_URI);
+    return getPassword(DUCKLAKE_CATALOG_URI).value();
   }
 
   public String getS3UrlStyle() {
@@ -159,11 +159,11 @@ public class DucklakeSinkConfig extends AbstractConfig {
   }
 
   public String getS3AccessKeyId() {
-    return getString(S3_ACCESS_KEY_ID);
+    return getPassword(S3_ACCESS_KEY_ID).value();
   }
 
   public String getS3SecretAccessKey() {
-    return getString(S3_SECRET_ACCESS_KEY);
+    return getPassword(S3_SECRET_ACCESS_KEY).value();
   }
 
   public String getDataPath() {
