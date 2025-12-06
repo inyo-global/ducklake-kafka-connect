@@ -2,7 +2,7 @@
 
 All notable changes to the DuckLake Kafka Connect Sink Connector will be documented in this file.
 
-## [Unreleased]
+## [0.0.63]
 
 ### Added
 - `CLAUDE.md` for project context and documentation
