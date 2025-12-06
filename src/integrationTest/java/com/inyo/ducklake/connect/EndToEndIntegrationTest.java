@@ -256,6 +256,11 @@ class EndToEndIntegrationTest {
     connectorProps.put("s3.access_key_id", "minio");
     connectorProps.put("s3.secret_access_key", "minio123");
 
+    // Set low flush thresholds for integration tests
+    connectorProps.put(DucklakeSinkConfig.FLUSH_SIZE, "1");
+    connectorProps.put(DucklakeSinkConfig.FLUSH_INTERVAL_MS, "1000");
+    connectorProps.put(DucklakeSinkConfig.FILE_SIZE_BYTES, "1024");
+
     return connectorProps;
   }
 

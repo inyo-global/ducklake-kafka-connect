@@ -24,9 +24,8 @@ public final class TestConfig {
   public static @NotNull HashMap<String, String> getBaseDucklakeConfig() {
     var base = new HashMap<String, String>();
     base.put(DucklakeSinkConfig.DUCKLAKE_CATALOG_URI, "memory");
-    base.put("ducklake.data_path", "/tmp/test-data");
-    base.put("s3.url_style", "path");
     base.put("ducklake.data_path", "file:///tmp/ducklake-test/");
+    base.put("s3.url_style", "path");
     base.put("s3.endpoint", "localhost:9000");
     base.put("s3.access_key_id", "minio");
     base.put("s3.secret_access_key", "minio123");
