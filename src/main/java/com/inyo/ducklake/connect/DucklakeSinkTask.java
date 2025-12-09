@@ -23,7 +23,9 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -53,6 +55,8 @@ public class DucklakeSinkTask extends SinkTask {
   private long flushIntervalMs;
   private long fileSizeBytes;
   private ScheduledExecutorService flushScheduler;
+  private ExecutorService partitionExecutor;
+  private boolean parallelPartitionFlush;
 
   // Per-partition locks to allow parallel processing across partitions
   private final ConcurrentHashMap<TopicPartition, ReentrantLock> partitionLocks =
@@ -129,12 +133,29 @@ public class DucklakeSinkTask extends SinkTask {
     this.flushSize = config.getFlushSize();
     this.flushIntervalMs = config.getFlushIntervalMs();
     this.fileSizeBytes = config.getFileSizeBytes();
+    this.parallelPartitionFlush = config.isParallelPartitionFlushEnabled();
 
+    int threadCount = config.getDuckDbThreads();
     LOG.info(
-        "Buffering config: flushSize={}, flushIntervalMs={}, fileSizeBytes={}",
+        "Buffering config: flushSize={}, flushIntervalMs={}, fileSizeBytes={}, "
+            + "parallelPartitionFlush={}, duckdbThreads={}",
         flushSize,
         flushIntervalMs,
-        fileSizeBytes);
+        fileSizeBytes,
+        parallelPartitionFlush,
+        threadCount);
+
+    // Create executor for parallel partition processing
+    if (parallelPartitionFlush) {
+      this.partitionExecutor =
+          Executors.newFixedThreadPool(
+              Math.max(4, threadCount),
+              r -> {
+                Thread t = new Thread(r, "ducklake-partition-worker");
+                t.setDaemon(true);
+                return t;
+              });
+    }
 
     // Start scheduled flush checker (runs every 1 second to check time-based flush)
     this.flushScheduler =
@@ -240,57 +261,87 @@ public class DucklakeSinkTask extends SinkTask {
     Map<TopicPartition, List<SinkRecord>> recordsByPartition =
         SinkRecordToArrowConverter.groupRecordsByPartition(records);
 
-    // Process each partition with its own lock
+    if (parallelPartitionFlush && recordsByPartition.size() > 1) {
+      // Process partitions in parallel for better throughput
+      processPartitionsInParallel(recordsByPartition);
+    } else {
+      // Sequential processing for single partition or when parallel is disabled
+      for (Map.Entry<TopicPartition, List<SinkRecord>> entry : recordsByPartition.entrySet()) {
+        processPartition(entry.getKey(), entry.getValue());
+      }
+    }
+  }
+
+  /** Process partitions in parallel using the partition executor. */
+  private void processPartitionsInParallel(
+      Map<TopicPartition, List<SinkRecord>> recordsByPartition) {
+    List<CompletableFuture<Void>> futures = new ArrayList<>(recordsByPartition.size());
+
     for (Map.Entry<TopicPartition, List<SinkRecord>> entry : recordsByPartition.entrySet()) {
       TopicPartition partition = entry.getKey();
       List<SinkRecord> partitionRecords = entry.getValue();
 
-      ReentrantLock lock = partitionLocks.computeIfAbsent(partition, k -> new ReentrantLock());
-      lock.lock();
-      try {
-        // Detect if we have Arrow IPC data (VectorSchemaRoot) or traditional data
-        boolean hasArrowIpcData =
-            partitionRecords.stream()
-                .anyMatch(record -> record.value() instanceof VectorSchemaRoot);
+      CompletableFuture<Void> future =
+          CompletableFuture.runAsync(
+              () -> processPartition(partition, partitionRecords), partitionExecutor);
+      futures.add(future);
+    }
 
-        if (hasArrowIpcData) {
-          bufferArrowIpcRecordsForPartition(partition, partitionRecords);
-        } else {
-          bufferTraditionalRecordsForPartition(partition, partitionRecords);
-        }
+    // Wait for all partitions to complete and collect any errors
+    try {
+      CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+    } catch (Exception e) {
+      LOG.error("Error during parallel partition processing", e);
+      throw new RuntimeException("Failed to process partitions in parallel", e);
+    }
+  }
 
-        // Check if this partition needs flushing
-        checkAndFlushPartition(partition);
-      } catch (Exception e) {
-        // Build a concise metadata sample for easier debugging (topic:partition@offset)
-        var sb = new StringBuilder();
-        sb.append("Error processing records for partition ")
-            .append(partition)
-            .append(". batchSize=")
-            .append(partitionRecords.size())
-            .append(". sampleOffsets=");
-        var idx = 0;
-        for (SinkRecord r : partitionRecords) {
-          var offset = String.valueOf(r.kafkaOffset());
-          sb.append("[")
-              .append(r.topic())
-              .append(":")
-              .append(r.kafkaPartition())
-              .append("@")
-              .append(offset)
-              .append("]");
-          if (++idx >= 10) {
-            sb.append("(truncated)");
-            break;
-          } else {
-            sb.append(',');
-          }
-        }
-        LOG.error(sb.toString(), e);
-        throw new RuntimeException("Failed to process sink records", e);
-      } finally {
-        lock.unlock();
+  /** Process a single partition with proper locking. */
+  private void processPartition(TopicPartition partition, List<SinkRecord> partitionRecords) {
+    ReentrantLock lock = partitionLocks.computeIfAbsent(partition, k -> new ReentrantLock());
+    lock.lock();
+    try {
+      // Detect if we have Arrow IPC data (VectorSchemaRoot) or traditional data
+      boolean hasArrowIpcData =
+          partitionRecords.stream().anyMatch(record -> record.value() instanceof VectorSchemaRoot);
+
+      if (hasArrowIpcData) {
+        bufferArrowIpcRecordsForPartition(partition, partitionRecords);
+      } else {
+        bufferTraditionalRecordsForPartition(partition, partitionRecords);
       }
+
+      // Check if this partition needs flushing
+      checkAndFlushPartition(partition);
+    } catch (Exception e) {
+      // Build a concise metadata sample for easier debugging (topic:partition@offset)
+      var sb = new StringBuilder();
+      sb.append("Error processing records for partition ")
+          .append(partition)
+          .append(". batchSize=")
+          .append(partitionRecords.size())
+          .append(". sampleOffsets=");
+      var idx = 0;
+      for (SinkRecord r : partitionRecords) {
+        var offset = String.valueOf(r.kafkaOffset());
+        sb.append("[")
+            .append(r.topic())
+            .append(":")
+            .append(r.kafkaPartition())
+            .append("@")
+            .append(offset)
+            .append("]");
+        if (++idx >= 10) {
+          sb.append("(truncated)");
+          break;
+        } else {
+          sb.append(',');
+        }
+      }
+      LOG.error(sb.toString(), e);
+      throw new RuntimeException("Failed to process sink records", e);
+    } finally {
+      lock.unlock();
     }
   }
 
@@ -456,6 +507,19 @@ public class DucklakeSinkTask extends SinkTask {
         }
       } catch (InterruptedException e) {
         flushScheduler.shutdownNow();
+        Thread.currentThread().interrupt();
+      }
+    }
+
+    // Stop the partition executor
+    if (partitionExecutor != null) {
+      partitionExecutor.shutdown();
+      try {
+        if (!partitionExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+          partitionExecutor.shutdownNow();
+        }
+      } catch (InterruptedException e) {
+        partitionExecutor.shutdownNow();
         Thread.currentThread().interrupt();
       }
     }
