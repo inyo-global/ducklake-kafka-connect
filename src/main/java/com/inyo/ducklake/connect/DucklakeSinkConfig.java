@@ -54,6 +54,10 @@ public class DucklakeSinkConfig extends AbstractConfig {
   public static final String FLUSH_INTERVAL_MS = "flush.interval.ms";
   public static final String FILE_SIZE_BYTES = "file.size.bytes";
 
+  // Performance tuning
+  public static final String DUCKDB_THREADS = "duckdb.threads";
+  public static final String PARALLEL_PARTITION_FLUSH = "parallel.partition.flush";
+
   // Table-specific configuration property patterns
   static final String TABLE_ID_COLUMNS_PATTERN = "ducklake.table.%s.id-columns";
   static final String TABLE_PARTITION_BY_PATTERN = "ducklake.table.%s.partition-by";
@@ -135,7 +139,20 @@ public class DucklakeSinkConfig extends AbstractConfig {
             268435456L,
             ConfigDef.Importance.MEDIUM,
             "Target file size in bytes before flushing the buffer. "
-                + "Default: 268435456 (256MB). Set to 536870912 for 512MB files.");
+                + "Default: 268435456 (256MB). Set to 536870912 for 512MB files.")
+        .define(
+            DUCKDB_THREADS,
+            ConfigDef.Type.INT,
+            0,
+            ConfigDef.Importance.MEDIUM,
+            "Number of threads for DuckDB to use. 0 means use all available processors. "
+                + "Default: 0 (all cores)")
+        .define(
+            PARALLEL_PARTITION_FLUSH,
+            ConfigDef.Type.BOOLEAN,
+            true,
+            ConfigDef.Importance.MEDIUM,
+            "Enable parallel flushing of partitions for higher throughput. Default: true");
   }
 
   public DucklakeSinkConfig(ConfigDef definition, Map<?, ?> originals) {
@@ -199,6 +216,28 @@ public class DucklakeSinkConfig extends AbstractConfig {
    */
   public long getFileSizeBytes() {
     return getLong(FILE_SIZE_BYTES);
+  }
+
+  /**
+   * Returns the number of threads DuckDB should use for parallel processing.
+   *
+   * @return number of threads, 0 means use all available processors
+   */
+  public int getDuckDbThreads() {
+    int threads = getInt(DUCKDB_THREADS);
+    if (threads <= 0) {
+      return Runtime.getRuntime().availableProcessors();
+    }
+    return threads;
+  }
+
+  /**
+   * Returns whether parallel partition flushing is enabled.
+   *
+   * @return true if parallel partition flush is enabled, default true
+   */
+  public boolean isParallelPartitionFlushEnabled() {
+    return getBoolean(PARALLEL_PARTITION_FLUSH);
   }
 
   /**

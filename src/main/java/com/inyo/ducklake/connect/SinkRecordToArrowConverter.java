@@ -26,6 +26,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.BaseVariableWidthVector;
@@ -65,7 +66,13 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
 
   private final BufferAllocator allocator;
 
-  // not closed here
+  // Cache unified schemas per topic to avoid repeated schema unification
+  // Key is topic name, value is the cached unified schema
+  private final ConcurrentHashMap<String, Schema> schemaCache = new ConcurrentHashMap<>();
+
+  // Cache for Kafka schema to Arrow schema conversion
+  private final ConcurrentHashMap<org.apache.kafka.connect.data.Schema, Schema>
+      kafkaToArrowSchemaCache = new ConcurrentHashMap<>();
 
   public SinkRecordToArrowConverter(BufferAllocator externalAllocator) {
     if (externalAllocator == null) {
@@ -146,8 +153,11 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
         throw new IllegalStateException("No valid schemas found in records");
       }
 
-      // Unify all schemas into a single schema
-      Schema unifiedSchema = unifySchemas(arrowSchemas, records);
+      // Get topic from first record for schema caching
+      String topic = records.iterator().next().topic();
+
+      // Unify all schemas into a single schema (with caching)
+      Schema unifiedSchema = unifySchemas(arrowSchemas, records, topic);
 
       // Create and populate VectorSchemaRoot
       VectorSchemaRoot vectorSchemaRoot = VectorSchemaRoot.create(unifiedSchema, allocator);
@@ -226,18 +236,61 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
   private List<Schema> extractArrowSchemas(Collection<SinkRecord> records) {
     return records.stream()
         .filter(record -> record.valueSchema() != null)
-        .map(record -> KafkaSchemaToArrow.arrowSchemaFromKafka(record.valueSchema()))
+        .map(
+            record -> {
+              // Use cached Arrow schema conversion when possible
+              org.apache.kafka.connect.data.Schema kafkaSchema = record.valueSchema();
+              return kafkaToArrowSchemaCache.computeIfAbsent(
+                  kafkaSchema, KafkaSchemaToArrow::arrowSchemaFromKafka);
+            })
         .distinct()
         .collect(Collectors.toList());
   }
 
-  private Schema unifySchemas(List<Schema> arrowSchemas, Collection<SinkRecord> records) {
+  private Schema unifySchemas(
+      List<Schema> arrowSchemas, Collection<SinkRecord> records, String topic) {
     if (arrowSchemas.size() == 1) {
-      return arrowSchemas.get(0);
+      Schema schema = arrowSchemas.get(0);
+      // Cache single-schema case for this topic
+      schemaCache.put(topic, schema);
+      return schema;
     }
 
-    // Use the new unified approach that only collects sample values when needed
-    return ArrowSchemaMerge.unifySchemas(arrowSchemas, () -> collectSampleValues(records));
+    // Check if we have a cached schema for this topic that's compatible
+    Schema cachedSchema = schemaCache.get(topic);
+    if (cachedSchema != null) {
+      // Verify all incoming schemas are subsets of the cached schema
+      boolean allCompatible =
+          arrowSchemas.stream()
+              .allMatch(
+                  incoming -> {
+                    for (var field : incoming.getFields()) {
+                      var cachedField = cachedSchema.findField(field.getName());
+                      if (cachedField == null) {
+                        return false; // New field not in cache
+                      }
+                    }
+                    return true;
+                  });
+
+      if (allCompatible) {
+        LOG.debug("Using cached schema for topic {}", topic);
+        return cachedSchema;
+      }
+    }
+
+    // Need to compute unified schema
+    Schema unifiedSchema =
+        ArrowSchemaMerge.unifySchemas(arrowSchemas, () -> collectSampleValues(records));
+
+    // Cache the result
+    schemaCache.put(topic, unifiedSchema);
+    LOG.debug(
+        "Cached new unified schema for topic {} with {} fields",
+        topic,
+        unifiedSchema.getFields().size());
+
+    return unifiedSchema;
   }
 
   /**

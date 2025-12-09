@@ -43,7 +43,8 @@ public class DucklakeConnectionFactory {
     properties.setProperty("s3_endpoint", config.getS3Endpoint());
     properties.setProperty("s3_access_key_id", config.getS3AccessKeyId());
     properties.setProperty("s3_secret_access_key", config.getS3SecretAccessKey());
-    properties.setProperty("threads", "1");
+    int threadCount = config.getDuckDbThreads();
+    properties.setProperty("threads", String.valueOf(threadCount));
     this.conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
     final String statement = buildAttachStatement();
     try (var st = conn.createStatement()) {
