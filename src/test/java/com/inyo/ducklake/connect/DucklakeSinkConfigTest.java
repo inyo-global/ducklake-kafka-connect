@@ -58,9 +58,7 @@ public class DucklakeSinkConfigTest {
   public void parse_defaultIs10000() {
     var props = new HashMap<String, String>();
     var cfg = makeConfig(props);
-    var val = cfg.getDataInliningRowLimit();
-    // Default is 'off' -> disabled
-    assertFalse(val.isPresent());
+    assertEquals("10000", cfg.getString(DucklakeSinkConfig.DATA_INLINING_ROW_LIMIT));
   }
 
   @Test

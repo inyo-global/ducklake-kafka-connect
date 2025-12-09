@@ -58,7 +58,7 @@ public class DucklakeSinkConfig extends AbstractConfig {
         .define(
             DATA_INLINING_ROW_LIMIT,
             ConfigDef.Type.STRING,
-            "off",
+            "10000",
             ConfigDef.Importance.MEDIUM,
             "Maximum number of rows to inline into metadata for small files, or 'off' to disable")
         .define(
