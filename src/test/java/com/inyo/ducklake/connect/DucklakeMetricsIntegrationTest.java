@@ -21,6 +21,7 @@ import com.inyo.ducklake.TestHelper;
 import com.inyo.ducklake.ingestor.DucklakeWriter;
 import com.inyo.ducklake.ingestor.DucklakeWriterConfig;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
@@ -207,7 +208,7 @@ class DucklakeMetricsIntegrationTest {
     for (var i = 0; i < count; i++) {
       var id = startId + i;
       idVector.setSafe(i, id);
-      nameVector.setSafe(i, ("name_" + id).getBytes());
+      nameVector.setSafe(i, ("name_" + id).getBytes(StandardCharsets.UTF_8));
     }
 
     root.setRowCount(count);
