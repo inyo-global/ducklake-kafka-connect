@@ -306,6 +306,21 @@ jobs:
       - name: Build release artifacts
         run: ./gradlew build
 
+      - name: Calculate next version
+        id: version
+        run: |
+          # Get the latest v0.0.X tag and increment
+          LATEST_TAG=$(git tag -l 'v0.0.*' | sort -t. -k3 -n | tail -1)
+          if [ -z "$LATEST_TAG" ]; then
+            NEXT_VERSION="v0.0.1"
+          else
+            CURRENT_PATCH=$(echo "$LATEST_TAG" | sed 's/v0\.0\.//')
+            NEXT_PATCH=$((CURRENT_PATCH + 1))
+            NEXT_VERSION="v0.0.$NEXT_PATCH"
+          fi
+          echo "version=$NEXT_VERSION" >> $GITHUB_OUTPUT
+          echo "Next version: $NEXT_VERSION"
+
       - name: Create release
         uses: softprops/action-gh-release@v1
         with:
@@ -313,8 +328,8 @@ jobs:
             build/libs/*.jar
             build/distributions/*.tar
             build/distributions/*.zip
-          tag_name: v0.0.${{ github.run_number }}
-          name: Release v0.0.${{ github.run_number }}
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
           draft: false
           prerelease: false
         env:
