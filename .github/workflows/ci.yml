@@ -359,3 +359,12 @@ jobs:
           git push origin latest --force
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trigger kafka-connect Docker image rebuild
+        run: |
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token ${{ secrets.CLOUD_INFRA_DISPATCH_TOKEN }}" \
+            https://api.github.com/repos/PostHog/posthog-cloud-infra/dispatches \
+            -d '{"event_type":"ducklake-release","client_payload":{"version":"${{ steps.version.outputs.version }}"}}'
+        continue-on-error: true
