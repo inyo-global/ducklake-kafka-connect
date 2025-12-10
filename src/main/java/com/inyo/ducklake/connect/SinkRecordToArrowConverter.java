@@ -26,6 +26,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import org.apache.arrow.memory.BufferAllocator;
@@ -259,14 +260,18 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
     // Check if we have a cached schema for this topic that's compatible
     Schema cachedSchema = schemaCache.get(topic);
     if (cachedSchema != null) {
+      // Build a set of cached field names for fast lookup
+      // (findField throws IllegalArgumentException if not found, so we can't use it directly)
+      Set<String> cachedFieldNames =
+          cachedSchema.getFields().stream().map(Field::getName).collect(Collectors.toSet());
+
       // Verify all incoming schemas are subsets of the cached schema
       boolean allCompatible =
           arrowSchemas.stream()
               .allMatch(
                   incoming -> {
                     for (var field : incoming.getFields()) {
-                      var cachedField = cachedSchema.findField(field.getName());
-                      if (cachedField == null) {
+                      if (!cachedFieldNames.contains(field.getName())) {
                         return false; // New field not in cache
                       }
                     }
