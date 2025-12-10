@@ -58,6 +58,9 @@ public class DucklakeSinkConfig extends AbstractConfig {
   public static final String DUCKDB_THREADS = "duckdb.threads";
   public static final String PARALLEL_PARTITION_FLUSH = "parallel.partition.flush";
 
+  // DuckLake retry configuration for handling PostgreSQL serialization conflicts
+  public static final String DUCKLAKE_MAX_RETRY_COUNT = "ducklake.max_retry_count";
+
   // Table-specific configuration property patterns
   static final String TABLE_ID_COLUMNS_PATTERN = "ducklake.table.%s.id-columns";
   static final String TABLE_PARTITION_BY_PATTERN = "ducklake.table.%s.partition-by";
@@ -152,7 +155,14 @@ public class DucklakeSinkConfig extends AbstractConfig {
             ConfigDef.Type.BOOLEAN,
             true,
             ConfigDef.Importance.MEDIUM,
-            "Enable parallel flushing of partitions for higher throughput. Default: true");
+            "Enable parallel flushing of partitions for higher throughput. Default: true")
+        .define(
+            DUCKLAKE_MAX_RETRY_COUNT,
+            ConfigDef.Type.INT,
+            10,
+            ConfigDef.Importance.MEDIUM,
+            "Maximum number of retries for DuckLake transactions when PostgreSQL serialization "
+                + "conflicts occur. Increase for high-concurrency deployments. Default: 10");
   }
 
   public DucklakeSinkConfig(ConfigDef definition, Map<?, ?> originals) {
@@ -238,6 +248,16 @@ public class DucklakeSinkConfig extends AbstractConfig {
    */
   public boolean isParallelPartitionFlushEnabled() {
     return getBoolean(PARALLEL_PARTITION_FLUSH);
+  }
+
+  /**
+   * Returns the maximum retry count for DuckLake transactions when PostgreSQL serialization
+   * conflicts occur.
+   *
+   * @return max retry count, default 10
+   */
+  public int getDucklakeMaxRetryCount() {
+    return getInt(DUCKLAKE_MAX_RETRY_COUNT);
   }
 
   /**

@@ -49,6 +49,9 @@ public class DucklakeConnectionFactory {
     final String statement = buildAttachStatement();
     try (var st = conn.createStatement()) {
       st.execute(statement);
+      // Configure DuckLake retry count for handling PostgreSQL serialization conflicts
+      int maxRetryCount = config.getDucklakeMaxRetryCount();
+      st.execute("SET ducklake_max_retry_count = " + maxRetryCount);
     }
   }
 
