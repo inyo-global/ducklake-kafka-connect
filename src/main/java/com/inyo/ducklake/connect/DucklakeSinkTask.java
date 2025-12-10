@@ -28,6 +28,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
@@ -67,6 +68,12 @@ public class DucklakeSinkTask extends SinkTask {
       new ConcurrentHashMap<>();
   private static final int MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING = 5;
   private static final long FLUSH_LOCK_TIMEOUT_MS = 100;
+
+  // Jitter configuration to stagger flushes and avoid PG row-level contention
+  // Each partition gets a random jitter offset (0 to maxJitterMs) applied to its flush timing
+  private static final double JITTER_FACTOR = 0.25; // 25% of flush interval as max jitter
+  private final ConcurrentHashMap<TopicPartition, Long> partitionJitterMs =
+      new ConcurrentHashMap<>();
 
   /** Per-partition buffer to accumulate records before writing */
   private static class PartitionBuffer {
@@ -168,7 +175,27 @@ public class DucklakeSinkTask extends SinkTask {
     flushScheduler.scheduleAtFixedRate(this::checkTimeBasedFlush, 1, 1, TimeUnit.SECONDS);
   }
 
-  /** Periodic check for time-based flush - uses per-partition locking */
+  /**
+   * Gets or assigns a random jitter offset for a partition. The jitter is assigned once per
+   * partition and remains stable to ensure consistent flush timing. This staggering prevents
+   * multiple partitions from flushing simultaneously, reducing PostgreSQL row-level contention.
+   */
+  private long getPartitionJitter(TopicPartition partition) {
+    return partitionJitterMs.computeIfAbsent(
+        partition,
+        p -> {
+          long maxJitter = (long) (flushIntervalMs * JITTER_FACTOR);
+          long jitter = ThreadLocalRandom.current().nextLong(maxJitter + 1);
+          LOG.debug(
+              "Assigned flush jitter {}ms to partition {} (maxJitter={}ms)",
+              jitter,
+              partition,
+              maxJitter);
+          return jitter;
+        });
+  }
+
+  /** Periodic check for time-based flush - uses per-partition locking with jitter */
   private void checkTimeBasedFlush() {
     long now = System.currentTimeMillis();
 
@@ -176,8 +203,13 @@ public class DucklakeSinkTask extends SinkTask {
       TopicPartition partition = entry.getKey();
       PartitionBuffer buffer = entry.getValue();
 
-      // Skip if buffer is empty or not due for flush
-      if (buffer.pendingBatches.isEmpty() || (now - buffer.lastFlushTime) < flushIntervalMs) {
+      // Get or assign jitter for this partition (stagger commits to avoid PG contention)
+      long jitter = getPartitionJitter(partition);
+      long effectiveFlushInterval = flushIntervalMs + jitter;
+
+      // Skip if buffer is empty or not due for flush (accounting for jitter)
+      if (buffer.pendingBatches.isEmpty()
+          || (now - buffer.lastFlushTime) < effectiveFlushInterval) {
         continue;
       }
 
@@ -209,11 +241,14 @@ public class DucklakeSinkTask extends SinkTask {
         consecutiveFlushSkips.computeIfAbsent(partition, k -> new AtomicInteger(0)).set(0);
 
         // Re-check condition under lock (double-check pattern)
-        if (!buffer.pendingBatches.isEmpty() && (now - buffer.lastFlushTime) >= flushIntervalMs) {
+        if (!buffer.pendingBatches.isEmpty()
+            && (now - buffer.lastFlushTime) >= effectiveFlushInterval) {
           LOG.info(
-              "Time-based flush triggered for partition {} (age={}ms, records={}, bytes={})",
+              "Time-based flush triggered for partition {} (age={}ms, jitter={}ms, records={},"
+                  + " bytes={})",
               partition,
               now - buffer.lastFlushTime,
+              jitter,
               buffer.recordCount,
               buffer.estimatedBytes);
           flushPartition(partition);
@@ -543,6 +578,7 @@ public class DucklakeSinkTask extends SinkTask {
     buffers.clear();
     partitionLocks.clear();
     consecutiveFlushSkips.clear();
+    partitionJitterMs.clear();
 
     try {
       if (writers != null) {
