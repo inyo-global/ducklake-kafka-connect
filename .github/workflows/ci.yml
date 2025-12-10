@@ -274,7 +274,7 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     needs: [build, static-analysis, security-scan]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
 
@@ -304,7 +304,24 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build release artifacts
-        run: ./gradlew build
+        run: ./gradlew build -x test -x integrationTest
+
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "## Changes" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "${{ github.event.head_commit.message }}" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "---" >> $GITHUB_OUTPUT
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "**Author:** ${{ github.event.head_commit.author.name }}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Calculate next version
         id: version
@@ -329,8 +346,16 @@ jobs:
             build/distributions/*.tar
             build/distributions/*.zip
           tag_name: ${{ steps.version.outputs.version }}
-          name: Release ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }} (${{ steps.sha.outputs.short }})
+          body: ${{ steps.notes.outputs.notes }}
           draft: false
           prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update latest tag
+        run: |
+          git tag -f latest
+          git push origin latest --force
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
