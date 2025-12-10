@@ -65,6 +65,10 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
 
   private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
 
+  // Field names that should never be inferred as timestamps (case-insensitive suffix matching)
+  private static final Set<String> ID_FIELD_SUFFIXES =
+      Set.of("_id", "id", "_uuid", "uuid", "_key", "key");
+
   private final BufferAllocator allocator;
 
   // Cache unified schemas per topic to avoid repeated schema unification
@@ -748,8 +752,30 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
     mapVector.endValue(index, pairsAdded);
   }
 
+  /**
+   * Checks if a field name looks like an ID field that should not be inferred as a timestamp. Uses
+   * case-insensitive suffix matching against common ID field patterns.
+   */
+  private boolean isIdLikeField(String fieldName) {
+    if (fieldName == null) {
+      return false;
+    }
+    String lower = fieldName.toLowerCase(java.util.Locale.ROOT);
+    for (String suffix : ID_FIELD_SUFFIXES) {
+      if (lower.endsWith(suffix)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // Infer a Kafka Connect schema for a given example object (Maps -> STRUCT, Collections -> ARRAY)
   private org.apache.kafka.connect.data.Schema inferSchemaFromObject(Object example) {
+    return inferSchemaFromObject(example, null);
+  }
+
+  private org.apache.kafka.connect.data.Schema inferSchemaFromObject(
+      Object example, String fieldName) {
     if (example == null) {
       // Don't infer schema from null values - return null to indicate no type information
       return null;
@@ -759,7 +785,8 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
       for (var e : map.entrySet()) {
         String name = String.valueOf(e.getKey());
         Object v = e.getValue();
-        org.apache.kafka.connect.data.Schema childSchema = inferSchemaFromObject(v);
+        // Pass field name to recursive call for ID field heuristic
+        org.apache.kafka.connect.data.Schema childSchema = inferSchemaFromObject(v, name);
         // Only add fields where we can determine the schema from non-null values
         if (childSchema != null) {
           sb.field(name, childSchema);
@@ -793,7 +820,10 @@ public final class SinkRecordToArrowConverter implements AutoCloseable {
     if (example instanceof Boolean) return org.apache.kafka.connect.data.Schema.BOOLEAN_SCHEMA;
     if (example instanceof byte[]) return org.apache.kafka.connect.data.Schema.BYTES_SCHEMA;
 
-    if (example instanceof String str && TimestampUtils.isTimestamp(str)) {
+    // Only infer timestamp if not an ID-like field (to avoid mistyping distinct_id, user_id, etc.)
+    if (example instanceof String str
+        && !isIdLikeField(fieldName)
+        && TimestampUtils.isTimestamp(str)) {
       return Timestamp.builder().optional().build();
     }
 
