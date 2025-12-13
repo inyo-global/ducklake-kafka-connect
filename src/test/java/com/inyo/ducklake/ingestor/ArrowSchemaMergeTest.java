@@ -371,6 +371,140 @@ class ArrowSchemaMergeTest {
   }
 
   @Nested
+  @DisplayName("String-Timestamp Unification Tests")
+  class StringTimestampUnificationTests {
+
+    @Test
+    @DisplayName("Should prefer string over timestamp when mixing types")
+    void shouldPreferStringOverTimestampWhenMixingTypes() {
+      // Given - one schema has a field as string, another has it as timestamp
+      // This simulates the distinct_id bug where some records inferred timestamp
+      Field stringField = createField("distinct_id", ArrowType.Utf8.INSTANCE, false);
+      Field timestampField =
+          createField(
+              "distinct_id",
+              new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, null),
+              false);
+
+      Schema schema1 = new Schema(Collections.singletonList(stringField));
+      Schema schema2 = new Schema(Collections.singletonList(timestampField));
+
+      // When
+      Schema unified = ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
+
+      // Then - should unify to string (VARCHAR), not timestamp
+      assertEquals(1, unified.getFields().size());
+      Field unifiedField = unified.getFields().get(0);
+      assertEquals("distinct_id", unifiedField.getName());
+      assertEquals(ArrowType.Utf8.INSTANCE, unifiedField.getFieldType().getType());
+    }
+
+    @Test
+    @DisplayName("Should prefer string over date when mixing types")
+    void shouldPreferStringOverDateWhenMixingTypes() {
+      // Given
+      Field stringField = createField("created_date", ArrowType.Utf8.INSTANCE, false);
+      Field dateField =
+          createField(
+              "created_date",
+              new ArrowType.Date(org.apache.arrow.vector.types.DateUnit.DAY),
+              false);
+
+      Schema schema1 = new Schema(Collections.singletonList(stringField));
+      Schema schema2 = new Schema(Collections.singletonList(dateField));
+
+      // When
+      Schema unified = ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
+
+      // Then - should unify to string (VARCHAR)
+      assertEquals(1, unified.getFields().size());
+      Field unifiedField = unified.getFields().get(0);
+      assertEquals(ArrowType.Utf8.INSTANCE, unifiedField.getFieldType().getType());
+    }
+
+    @Test
+    @DisplayName("Should prefer string over time when mixing types")
+    void shouldPreferStringOverTimeWhenMixingTypes() {
+      // Given
+      Field stringField = createField("event_time", ArrowType.Utf8.INSTANCE, false);
+      Field timeField =
+          createField(
+              "event_time",
+              new ArrowType.Time(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, 32),
+              false);
+
+      Schema schema1 = new Schema(Collections.singletonList(stringField));
+      Schema schema2 = new Schema(Collections.singletonList(timeField));
+
+      // When
+      Schema unified = ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
+
+      // Then - should unify to string (VARCHAR)
+      assertEquals(1, unified.getFields().size());
+      Field unifiedField = unified.getFields().get(0);
+      assertEquals(ArrowType.Utf8.INSTANCE, unifiedField.getFieldType().getType());
+    }
+
+    @Test
+    @DisplayName("Should still unify pure timestamp types correctly")
+    void shouldStillUnifyPureTimestampTypesCorrectly() {
+      // Given - both schemas have timestamp, should still unify to timestamp
+      Field timestampField1 =
+          createField(
+              "created_at",
+              new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, null),
+              false);
+      Field timestampField2 =
+          createField(
+              "created_at",
+              new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MICROSECOND, null),
+              false);
+
+      Schema schema1 = new Schema(Collections.singletonList(timestampField1));
+      Schema schema2 = new Schema(Collections.singletonList(timestampField2));
+
+      // When
+      Schema unified = ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
+
+      // Then - should unify to timestamp
+      assertEquals(1, unified.getFields().size());
+      Field unifiedField = unified.getFields().get(0);
+      assertInstanceOf(ArrowType.Timestamp.class, unifiedField.getFieldType().getType());
+    }
+
+    @Test
+    @DisplayName("Should handle multiple fields with mixed types")
+    void shouldHandleMultipleFieldsWithMixedTypes() {
+      // Given - multiple fields, one with string/timestamp mix, others compatible
+      Field idStringField = createField("distinct_id", ArrowType.Utf8.INSTANCE, false);
+      Field idTimestampField =
+          createField(
+              "distinct_id",
+              new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, null),
+              false);
+      Field countField1 = createField("count", new ArrowType.Int(32, true), false);
+      Field countField2 = createField("count", new ArrowType.Int(64, true), false);
+
+      Schema schema1 = new Schema(Arrays.asList(idStringField, countField1));
+      Schema schema2 = new Schema(Arrays.asList(idTimestampField, countField2));
+
+      // When
+      Schema unified = ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
+
+      // Then
+      assertEquals(2, unified.getFields().size());
+
+      // distinct_id should be string
+      Field idField = unified.findField("distinct_id");
+      assertEquals(ArrowType.Utf8.INSTANCE, idField.getFieldType().getType());
+
+      // count should be promoted to int64
+      Field countField = unified.findField("count");
+      assertEquals(new ArrowType.Int(64, true), countField.getFieldType().getType());
+    }
+  }
+
+  @Nested
   @DisplayName("Enhanced Error Messaging Tests")
   class EnhancedErrorMessagingTests {
 

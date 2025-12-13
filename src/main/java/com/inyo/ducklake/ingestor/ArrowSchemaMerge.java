@@ -174,7 +174,14 @@ public class ArrowSchemaMerge {
       return uniqueTypes.iterator().next();
     }
 
-    // Handle timestamp types specially - prefer timestamp over string
+    // Handle mixed string and timestamp types - prefer string (VARCHAR) as it's more general
+    // This prevents incorrect promotion of ID fields (like distinct_id) that happen to contain
+    // timestamp-like values from being promoted to TIMESTAMP type
+    if (hasMixedStringAndTimestamp(uniqueTypes)) {
+      return ArrowType.Utf8.INSTANCE;
+    }
+
+    // Handle timestamp types specially - only when all types are actual temporal types
     if (areAllTimestampLike(uniqueTypes)) {
       return promoteTimestampTypes(uniqueTypes);
     }
@@ -404,13 +411,31 @@ public class ArrowSchemaMerge {
   }
 
   private static boolean areAllTimestampLike(Set<ArrowType> types) {
+    // Only actual temporal types are considered timestamp-like
+    // Utf8 (string) is NOT included to prevent incorrect type promotion
     return types.stream()
         .allMatch(
             t ->
                 t instanceof ArrowType.Timestamp
                     || t instanceof ArrowType.Time
-                    || t instanceof ArrowType.Date
-                    || t instanceof ArrowType.Utf8); // Allow string as compatible with timestamp
+                    || t instanceof ArrowType.Date);
+  }
+
+  /**
+   * Checks if the type set contains a mix of string and timestamp types. This is used to prefer
+   * string (VARCHAR) over timestamp when unifying schemas, as string is more general and can
+   * represent any value including timestamps.
+   */
+  private static boolean hasMixedStringAndTimestamp(Set<ArrowType> types) {
+    boolean hasString = types.stream().anyMatch(t -> t instanceof ArrowType.Utf8);
+    boolean hasTimestamp =
+        types.stream()
+            .anyMatch(
+                t ->
+                    t instanceof ArrowType.Timestamp
+                        || t instanceof ArrowType.Time
+                        || t instanceof ArrowType.Date);
+    return hasString && hasTimestamp;
   }
 
   /**
