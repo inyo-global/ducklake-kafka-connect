@@ -174,7 +174,8 @@ public class ArrowSchemaMerge {
       return uniqueTypes.iterator().next();
     }
 
-    // Handle timestamp types specially - prefer timestamp over string
+    // Handle timestamp types specially - but NOT if mixed with strings
+    // Mixing string and timestamp types is an error that should be caught at the record level
     if (areAllTimestampLike(uniqueTypes)) {
       return promoteTimestampTypes(uniqueTypes);
     }
@@ -404,13 +405,15 @@ public class ArrowSchemaMerge {
   }
 
   private static boolean areAllTimestampLike(Set<ArrowType> types) {
+    // Only actual temporal types are considered timestamp-like
+    // Utf8 (string) is NOT included - mixing string and timestamp is an error
+    // that should be caught at the record validation level and routed to DLQ
     return types.stream()
         .allMatch(
             t ->
                 t instanceof ArrowType.Timestamp
                     || t instanceof ArrowType.Time
-                    || t instanceof ArrowType.Date
-                    || t instanceof ArrowType.Utf8); // Allow string as compatible with timestamp
+                    || t instanceof ArrowType.Date);
   }
 
   /**

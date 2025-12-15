@@ -20,6 +20,7 @@ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -36,6 +37,8 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.connect.errors.ConnectException;
+import org.apache.kafka.connect.sink.ErrantRecordReporter;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
 import org.slf4j.Logger;
@@ -68,6 +71,9 @@ public class DucklakeSinkTask extends SinkTask {
       new ConcurrentHashMap<>();
   private static final int MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING = 5;
   private static final long FLUSH_LOCK_TIMEOUT_MS = 100;
+
+  // Errant record reporter for sending bad records to DLQ
+  private ErrantRecordReporter errantRecordReporter;
 
   // Jitter configuration to stagger flushes and avoid PG row-level contention
   // Each partition gets a random jitter offset (0 to maxJitterMs) applied to its flush timing
@@ -173,6 +179,20 @@ public class DucklakeSinkTask extends SinkTask {
               return t;
             });
     flushScheduler.scheduleAtFixedRate(this::checkTimeBasedFlush, 1, 1, TimeUnit.SECONDS);
+
+    // Initialize errant record reporter for DLQ support (may be null if not configured)
+    try {
+      this.errantRecordReporter = context.errantRecordReporter();
+      if (errantRecordReporter != null) {
+        LOG.info("Errant record reporter initialized - bad records will be sent to DLQ");
+      } else {
+        LOG.info("No errant record reporter available - bad records will cause task failure");
+      }
+    } catch (NoSuchMethodError | NoClassDefFoundError e) {
+      // Older Kafka Connect versions may not have errantRecordReporter()
+      LOG.warn("ErrantRecordReporter not available in this Kafka Connect version");
+      this.errantRecordReporter = null;
+    }
   }
 
   /**
@@ -520,12 +540,142 @@ public class DucklakeSinkTask extends SinkTask {
     Map<TopicPartition, List<SinkRecord>> singlePartitionMap = new HashMap<>();
     singlePartitionMap.put(partition, records);
 
-    Map<TopicPartition, VectorSchemaRoot> vectorsByPartition =
-        converter.convertRecordsByPartition(singlePartitionMap);
+    try {
+      // Fast path: try batch conversion
+      Map<TopicPartition, VectorSchemaRoot> vectorsByPartition =
+          converter.convertRecordsByPartition(singlePartitionMap);
 
-    VectorSchemaRoot vectorSchemaRoot = vectorsByPartition.get(partition);
-    if (vectorSchemaRoot != null) {
-      buffer.add(vectorSchemaRoot);
+      VectorSchemaRoot vectorSchemaRoot = vectorsByPartition.get(partition);
+      if (vectorSchemaRoot != null) {
+        buffer.add(vectorSchemaRoot);
+      }
+    } catch (RuntimeException e) {
+      // Check if this is a schema conflict error (e.g., string vs timestamp type mismatch)
+      if (isSchemaConflictError(e)) {
+        LOG.warn(
+            "Schema conflict detected for partition {}, attempting per-record conversion to "
+                + "identify bad records: {}",
+            partition,
+            e.getMessage());
+        handleSchemaConflictWithDLQ(partition, records, buffer, e);
+      } else {
+        // Re-throw non-schema errors
+        throw e;
+      }
+    }
+  }
+
+  /**
+   * Checks if an exception is caused by a schema conflict (e.g., incompatible types like string vs
+   * timestamp).
+   */
+  private boolean isSchemaConflictError(Throwable e) {
+    // Check the exception chain for schema-related errors
+    Throwable current = e;
+    while (current != null) {
+      String message = current.getMessage();
+      if (message != null
+          && (message.contains("Cannot unify incompatible types")
+              || message.contains("Incompatible type for column")
+              || message.contains("conflicting types"))) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
+  }
+
+  /**
+   * Handles schema conflicts by converting records one-by-one to identify bad records and routing
+   * them to DLQ.
+   */
+  private void handleSchemaConflictWithDLQ(
+      TopicPartition partition,
+      List<SinkRecord> records,
+      PartitionBuffer buffer,
+      RuntimeException originalError) {
+
+    if (errantRecordReporter == null) {
+      // No DLQ configured - fail the entire batch
+      LOG.error(
+          "Schema conflict in partition {} and no DLQ configured. "
+              + "Configure errors.deadletterqueue.topic.name to route bad records to DLQ.",
+          partition);
+      throw originalError;
+    }
+
+    LOG.info(
+        "Converting {} records individually to identify bad records for partition {}",
+        records.size(),
+        partition);
+
+    List<SinkRecord> goodRecords = new ArrayList<>();
+    int badRecordCount = 0;
+
+    // Try converting each record individually
+    for (SinkRecord record : records) {
+      try {
+        Map<TopicPartition, List<SinkRecord>> singleRecordMap = new HashMap<>();
+        singleRecordMap.put(partition, Collections.singletonList(record));
+
+        Map<TopicPartition, VectorSchemaRoot> result =
+            converter.convertRecordsByPartition(singleRecordMap);
+
+        VectorSchemaRoot root = result.get(partition);
+        if (root != null) {
+          // Record converted successfully - close it for now, we'll re-batch good records
+          root.close();
+          goodRecords.add(record);
+        }
+      } catch (RuntimeException recordError) {
+        // This record caused the error - send to DLQ
+        badRecordCount++;
+        LOG.warn(
+            "Sending bad record to DLQ: topic={}, partition={}, offset={}, error={}",
+            record.topic(),
+            record.kafkaPartition(),
+            record.kafkaOffset(),
+            recordError.getMessage());
+
+        try {
+          errantRecordReporter.report(record, recordError);
+        } catch (Exception dlqError) {
+          LOG.error(
+              "Failed to report record to DLQ: topic={}, partition={}, offset={}",
+              record.topic(),
+              record.kafkaPartition(),
+              record.kafkaOffset(),
+              dlqError);
+          // If DLQ reporting fails, we need to fail the task
+          throw new ConnectException("Failed to report bad record to DLQ", dlqError);
+        }
+      }
+    }
+
+    LOG.info(
+        "Partition {}: {} records sent to DLQ, {} good records remaining",
+        partition,
+        badRecordCount,
+        goodRecords.size());
+
+    // Convert and buffer the good records
+    if (!goodRecords.isEmpty()) {
+      Map<TopicPartition, List<SinkRecord>> goodRecordsMap = new HashMap<>();
+      goodRecordsMap.put(partition, goodRecords);
+
+      try {
+        Map<TopicPartition, VectorSchemaRoot> vectorsByPartition =
+            converter.convertRecordsByPartition(goodRecordsMap);
+
+        VectorSchemaRoot vectorSchemaRoot = vectorsByPartition.get(partition);
+        if (vectorSchemaRoot != null) {
+          buffer.add(vectorSchemaRoot);
+        }
+      } catch (RuntimeException e) {
+        // This shouldn't happen if individual conversions succeeded, but handle it
+        LOG.error("Unexpected error converting good records after DLQ filtering", e);
+        throw e;
+      }
     }
   }
 
