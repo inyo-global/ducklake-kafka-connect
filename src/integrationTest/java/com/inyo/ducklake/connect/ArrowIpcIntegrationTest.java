@@ -25,6 +25,7 @@ import io.minio.MinioClient;
 import java.io.ByteArrayOutputStream;
 import java.nio.channels.Channels;
 import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
@@ -66,7 +67,8 @@ class ArrowIpcIntegrationTest {
   public static final KafkaContainer kafkaContainer =
       new KafkaContainer("apache/kafka-native:4.0.0")
           .withNetwork(network)
-          .withNetworkAliases("kafka");
+          .withNetworkAliases("kafka")
+          .withStartupTimeout(Duration.of(3, ChronoUnit.MINUTES));
 
   @Container
   @SuppressWarnings("resource")
