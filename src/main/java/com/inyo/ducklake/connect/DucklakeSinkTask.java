@@ -35,7 +35,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.types.pojo.Schema;
+import org.apache.arrow.vector.util.VectorBatchAppender;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.ErrantRecordReporter;
@@ -468,16 +471,29 @@ public class DucklakeSinkTask extends SinkTask {
         buffer.estimatedBytes,
         actualAllocatedBytes);
 
-    // Write each buffered batch
-    for (VectorSchemaRoot root : buffer.pendingBatches) {
-      try {
-        writer.write(root);
-      } catch (Exception e) {
-        LOG.error("Failed to write buffered data for partition: {}", partition, e);
-        // Clear buffer to avoid memory leaks even on failure
-        buffer.clear();
-        throw new RuntimeException("Failed to flush buffered data", e);
-      } finally {
+    // Consolidate all batches into a single VectorSchemaRoot for one write operation
+    VectorSchemaRoot consolidatedRoot = null;
+    try {
+      consolidatedRoot = consolidateBatches(buffer.pendingBatches);
+      if (consolidatedRoot != null && consolidatedRoot.getRowCount() > 0) {
+        writer.write(consolidatedRoot);
+      }
+    } catch (Exception e) {
+      LOG.error("Failed to write buffered data for partition: {}", partition, e);
+      // Clear buffer to avoid memory leaks even on failure
+      buffer.clear();
+      throw new RuntimeException("Failed to flush buffered data", e);
+    } finally {
+      // Close the consolidated root
+      if (consolidatedRoot != null) {
+        try {
+          consolidatedRoot.close();
+        } catch (Exception closeEx) {
+          LOG.warn("Failed to close consolidated VectorSchemaRoot: {}", closeEx.getMessage());
+        }
+      }
+      // Close all original batch roots
+      for (VectorSchemaRoot root : buffer.pendingBatches) {
         try {
           root.close();
         } catch (Exception closeEx) {
@@ -486,11 +502,62 @@ public class DucklakeSinkTask extends SinkTask {
       }
     }
 
-    // Clear the buffer (VectorSchemaRoots already closed in loop above)
+    // Clear the buffer
     buffer.pendingBatches.clear();
     buffer.recordCount = 0;
     buffer.estimatedBytes = 0;
     buffer.lastFlushTime = System.currentTimeMillis();
+  }
+
+  /**
+   * Consolidates multiple VectorSchemaRoot batches into a single VectorSchemaRoot. This reduces the
+   * number of write operations to DuckLake, improving throughput.
+   */
+  private VectorSchemaRoot consolidateBatches(List<VectorSchemaRoot> batches) {
+    if (batches == null || batches.isEmpty()) {
+      return null;
+    }
+    if (batches.size() == 1) {
+      // Single batch - no consolidation needed, but we need to copy it since
+      // the original will be closed separately
+      VectorSchemaRoot source = batches.get(0);
+      VectorSchemaRoot copy = VectorSchemaRoot.create(source.getSchema(), allocator);
+      copy.allocateNew();
+      for (int i = 0; i < source.getFieldVectors().size(); i++) {
+        FieldVector sourceVector = source.getFieldVectors().get(i);
+        FieldVector targetVector = copy.getFieldVectors().get(i);
+        for (int row = 0; row < source.getRowCount(); row++) {
+          targetVector.copyFrom(row, row, sourceVector);
+        }
+      }
+      copy.setRowCount(source.getRowCount());
+      return copy;
+    }
+
+    // Use schema from first batch
+    Schema schema = batches.get(0).getSchema();
+
+    // Calculate total row count
+    int totalRows = batches.stream().mapToInt(VectorSchemaRoot::getRowCount).sum();
+
+    // Create consolidated root
+    VectorSchemaRoot consolidated = VectorSchemaRoot.create(schema, allocator);
+    consolidated.allocateNew();
+
+    // Copy data from each batch using VectorBatchAppender
+    VectorSchemaRoot[] batchArray = batches.toArray(new VectorSchemaRoot[0]);
+    for (int i = 0; i < consolidated.getFieldVectors().size(); i++) {
+      FieldVector targetVector = consolidated.getFieldVectors().get(i);
+      FieldVector[] sourceVectors = new FieldVector[batchArray.length];
+      for (int j = 0; j < batchArray.length; j++) {
+        sourceVectors[j] = batchArray[j].getFieldVectors().get(i);
+      }
+      VectorBatchAppender.batchAppend(targetVector, sourceVectors);
+    }
+
+    consolidated.setRowCount(totalRows);
+    LOG.debug("Consolidated {} batches into single batch with {} rows", batches.size(), totalRows);
+    return consolidated;
   }
 
   /** Buffer Arrow IPC records for a single partition (called under partition lock) */
