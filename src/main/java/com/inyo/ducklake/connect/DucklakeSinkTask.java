@@ -527,7 +527,7 @@ public class DucklakeSinkTask extends SinkTask {
         FieldVector sourceVector = source.getFieldVectors().get(i);
         FieldVector targetVector = copy.getFieldVectors().get(i);
         for (int row = 0; row < source.getRowCount(); row++) {
-          targetVector.copyFrom(row, row, sourceVector);
+          targetVector.copyFromSafe(row, row, sourceVector);
         }
       }
       copy.setRowCount(source.getRowCount());
