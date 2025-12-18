@@ -471,12 +471,24 @@ public class DucklakeSinkTask extends SinkTask {
         buffer.estimatedBytes,
         actualAllocatedBytes);
 
-    // Consolidate all batches into a single VectorSchemaRoot for one write operation
+    // Try to consolidate all batches into a single VectorSchemaRoot for one write operation
     VectorSchemaRoot consolidatedRoot = null;
     try {
       consolidatedRoot = consolidateBatches(buffer.pendingBatches);
       if (consolidatedRoot != null && consolidatedRoot.getRowCount() > 0) {
+        // Consolidated successfully - write single batch
         writer.write(consolidatedRoot);
+      } else if (consolidatedRoot == null && !buffer.pendingBatches.isEmpty()) {
+        // Consolidation failed (schema mismatch) - fall back to writing individually
+        LOG.info(
+            "Writing {} batches individually for partition {} due to schema differences",
+            buffer.pendingBatches.size(),
+            partition);
+        for (VectorSchemaRoot root : buffer.pendingBatches) {
+          if (root.getRowCount() > 0) {
+            writer.write(root);
+          }
+        }
       }
     } catch (Exception e) {
       LOG.error("Failed to write buffered data for partition: {}", partition, e);
@@ -510,28 +522,68 @@ public class DucklakeSinkTask extends SinkTask {
   }
 
   /**
+   * Checks if all batches have compatible schemas for consolidation. Schemas are compatible if they
+   * have the same fields in the same order with the same types.
+   */
+  private boolean haveSameSchema(List<VectorSchemaRoot> batches) {
+    if (batches.size() <= 1) {
+      return true;
+    }
+    Schema firstSchema = batches.get(0).getSchema();
+    for (int i = 1; i < batches.size(); i++) {
+      Schema otherSchema = batches.get(i).getSchema();
+      if (!firstSchema.equals(otherSchema)) {
+        LOG.debug(
+            "Schema mismatch between batch 0 and batch {}: {} vs {}", i, firstSchema, otherSchema);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
    * Consolidates multiple VectorSchemaRoot batches into a single VectorSchemaRoot. This reduces the
-   * number of write operations to DuckLake, improving throughput.
+   * number of write operations to DuckLake, improving throughput. Returns null if batches have
+   * incompatible schemas (caller should fall back to writing individually).
    */
   private VectorSchemaRoot consolidateBatches(List<VectorSchemaRoot> batches) {
     if (batches == null || batches.isEmpty()) {
       return null;
     }
+
+    // Check if all batches have compatible schemas
+    if (!haveSameSchema(batches)) {
+      LOG.warn(
+          "Cannot consolidate {} batches due to schema mismatch - will write individually",
+          batches.size());
+      return null;
+    }
+
     if (batches.size() == 1) {
       // Single batch - no consolidation needed, but we need to copy it since
       // the original will be closed separately
       VectorSchemaRoot source = batches.get(0);
       VectorSchemaRoot copy = VectorSchemaRoot.create(source.getSchema(), allocator);
-      copy.allocateNew();
-      for (int i = 0; i < source.getFieldVectors().size(); i++) {
-        FieldVector sourceVector = source.getFieldVectors().get(i);
-        FieldVector targetVector = copy.getFieldVectors().get(i);
-        for (int row = 0; row < source.getRowCount(); row++) {
-          targetVector.copyFromSafe(row, row, sourceVector);
+      try {
+        copy.allocateNew();
+        for (int i = 0; i < source.getFieldVectors().size(); i++) {
+          FieldVector sourceVector = source.getFieldVectors().get(i);
+          FieldVector targetVector = copy.getFieldVectors().get(i);
+          for (int row = 0; row < source.getRowCount(); row++) {
+            targetVector.copyFromSafe(row, row, sourceVector);
+          }
         }
+        copy.setRowCount(source.getRowCount());
+        return copy;
+      } catch (Exception e) {
+        // Clean up on failure to prevent memory leak
+        try {
+          copy.close();
+        } catch (Exception closeEx) {
+          LOG.warn("Failed to close copy root during cleanup: {}", closeEx.getMessage());
+        }
+        throw e;
       }
-      copy.setRowCount(source.getRowCount());
-      return copy;
     }
 
     // Use schema from first batch
@@ -542,22 +594,33 @@ public class DucklakeSinkTask extends SinkTask {
 
     // Create consolidated root
     VectorSchemaRoot consolidated = VectorSchemaRoot.create(schema, allocator);
-    consolidated.allocateNew();
+    try {
+      consolidated.allocateNew();
 
-    // Copy data from each batch using VectorBatchAppender
-    VectorSchemaRoot[] batchArray = batches.toArray(new VectorSchemaRoot[0]);
-    for (int i = 0; i < consolidated.getFieldVectors().size(); i++) {
-      FieldVector targetVector = consolidated.getFieldVectors().get(i);
-      FieldVector[] sourceVectors = new FieldVector[batchArray.length];
-      for (int j = 0; j < batchArray.length; j++) {
-        sourceVectors[j] = batchArray[j].getFieldVectors().get(i);
+      // Copy data from each batch using VectorBatchAppender
+      VectorSchemaRoot[] batchArray = batches.toArray(new VectorSchemaRoot[0]);
+      for (int i = 0; i < consolidated.getFieldVectors().size(); i++) {
+        FieldVector targetVector = consolidated.getFieldVectors().get(i);
+        FieldVector[] sourceVectors = new FieldVector[batchArray.length];
+        for (int j = 0; j < batchArray.length; j++) {
+          sourceVectors[j] = batchArray[j].getFieldVectors().get(i);
+        }
+        VectorBatchAppender.batchAppend(targetVector, sourceVectors);
       }
-      VectorBatchAppender.batchAppend(targetVector, sourceVectors);
-    }
 
-    consolidated.setRowCount(totalRows);
-    LOG.debug("Consolidated {} batches into single batch with {} rows", batches.size(), totalRows);
-    return consolidated;
+      consolidated.setRowCount(totalRows);
+      LOG.debug(
+          "Consolidated {} batches into single batch with {} rows", batches.size(), totalRows);
+      return consolidated;
+    } catch (Exception e) {
+      // Clean up on failure to prevent memory leak
+      try {
+        consolidated.close();
+      } catch (Exception closeEx) {
+        LOG.warn("Failed to close consolidated root during cleanup: {}", closeEx.getMessage());
+      }
+      throw e;
+    }
   }
 
   /** Buffer Arrow IPC records for a single partition (called under partition lock) */
