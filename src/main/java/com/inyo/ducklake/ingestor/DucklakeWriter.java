@@ -200,6 +200,11 @@ public final class DucklakeWriter implements AutoCloseable {
             "Simple INSERT affected {} rows on table {}", affected, config.destinationTable());
       }
     }
+    // Drop the temp view to avoid memory leaks
+    try (var dropPs = connection.prepareStatement("DROP VIEW IF EXISTS " + tempTable)) {
+      dropPs.executeUpdate();
+      LOG.debug("Dropped temp view {}", tempTable);
+    }
   }
 
   @Override
