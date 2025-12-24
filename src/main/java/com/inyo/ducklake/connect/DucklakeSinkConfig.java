@@ -51,12 +51,14 @@ public class DucklakeSinkConfig extends AbstractConfig {
 
   // Buffering configuration for larger file sizes
   public static final String FLUSH_SIZE = "flush.size";
-  public static final String FLUSH_INTERVAL_MS = "flush.interval.ms";
   public static final String FILE_SIZE_BYTES = "file.size.bytes";
 
   // Performance tuning
   public static final String DUCKDB_THREADS = "duckdb.threads";
-  public static final String PARALLEL_PARTITION_FLUSH = "parallel.partition.flush";
+
+  // Deprecated configs (kept for backwards compatibility, but no longer used)
+  @Deprecated public static final String FLUSH_INTERVAL_MS = "flush.interval.ms";
+  @Deprecated public static final String PARALLEL_PARTITION_FLUSH = "parallel.partition.flush";
 
   // DuckLake retry configuration for handling PostgreSQL serialization conflicts
   public static final String DUCKLAKE_MAX_RETRY_COUNT = "ducklake.max_retry_count";
@@ -133,9 +135,9 @@ public class DucklakeSinkConfig extends AbstractConfig {
             FLUSH_INTERVAL_MS,
             ConfigDef.Type.LONG,
             60000L,
-            ConfigDef.Importance.MEDIUM,
-            "Maximum time in milliseconds to buffer records before forcing a flush. "
-                + "Ensures data is written even with low throughput. Default: 60000 (60 seconds)")
+            ConfigDef.Importance.LOW,
+            "[DEPRECATED] This setting is no longer used. Time-based flushing is now controlled "
+                + "by Kafka Connect's offset.flush.interval.ms setting.")
         .define(
             FILE_SIZE_BYTES,
             ConfigDef.Type.LONG,
@@ -154,8 +156,9 @@ public class DucklakeSinkConfig extends AbstractConfig {
             PARALLEL_PARTITION_FLUSH,
             ConfigDef.Type.BOOLEAN,
             true,
-            ConfigDef.Importance.MEDIUM,
-            "Enable parallel flushing of partitions for higher throughput. Default: true")
+            ConfigDef.Importance.LOW,
+            "[DEPRECATED] This setting is no longer used. The connector now uses Kafka Connect's "
+                + "single-threaded task model.")
         .define(
             DUCKLAKE_MAX_RETRY_COUNT,
             ConfigDef.Type.INT,
@@ -214,7 +217,9 @@ public class DucklakeSinkConfig extends AbstractConfig {
    * Returns the maximum time to buffer records before forcing a flush.
    *
    * @return flush interval in milliseconds, default 60000 (60 seconds)
+   * @deprecated Time-based flushing is now controlled by offset.flush.interval.ms
    */
+  @Deprecated
   public long getFlushIntervalMs() {
     return getLong(FLUSH_INTERVAL_MS);
   }
@@ -245,7 +250,9 @@ public class DucklakeSinkConfig extends AbstractConfig {
    * Returns whether parallel partition flushing is enabled.
    *
    * @return true if parallel partition flush is enabled, default true
+   * @deprecated The connector now uses Kafka Connect's single-threaded task model
    */
+  @Deprecated
   public boolean isParallelPartitionFlushEnabled() {
     return getBoolean(PARALLEL_PARTITION_FLUSH);
   }
