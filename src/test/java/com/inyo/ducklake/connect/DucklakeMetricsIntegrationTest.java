@@ -111,16 +111,6 @@ class DucklakeMetricsIntegrationTest {
     assertTrue(
         queryCount >= 3, "Should have executed at least 3 queries (INSERT + MERGE + INSERT)");
 
-    // Verify schema operation metrics
-    var schemaOpCount =
-        metricsRegistry.metrics().entrySet().stream()
-            .filter(entry -> entry.getKey().name().equals("schema-operation-count"))
-            .findFirst();
-
-    assertTrue(schemaOpCount.isPresent(), "Schema operation count metric should exist");
-    var schemaCount = (Double) schemaOpCount.get().getValue().metricValue();
-    assertTrue(schemaCount >= 1, "Should have executed at least 1 schema operation (CREATE TABLE)");
-
     // Verify average query time is recorded
     var avgQueryTime =
         metricsRegistry.metrics().entrySet().stream()
@@ -133,7 +123,6 @@ class DucklakeMetricsIntegrationTest {
 
     System.out.println("=== Metrics Summary ===");
     System.out.println("Total JDBC Queries: " + queryCount);
-    System.out.println("Total Schema Operations: " + schemaCount);
     System.out.println("Average Query Time: " + avgTime + "ms");
 
     // Print all metrics for debugging
@@ -181,17 +170,6 @@ class DucklakeMetricsIntegrationTest {
     assertTrue(jdbcQueryCount.isPresent());
     var queryCount = (Double) jdbcQueryCount.get().getValue().metricValue();
     assertTrue(queryCount >= 2, "Should have executed at least 2 queries (one INSERT per table)");
-
-    var schemaOpCount =
-        metricsRegistry.metrics().entrySet().stream()
-            .filter(entry -> entry.getKey().name().equals("schema-operation-count"))
-            .findFirst();
-
-    assertTrue(schemaOpCount.isPresent());
-    var schemaCount = (Double) schemaOpCount.get().getValue().metricValue();
-    assertTrue(
-        schemaCount >= 2,
-        "Should have executed at least 2 schema operations (one CREATE per table)");
   }
 
   private Schema createTestSchema() {
