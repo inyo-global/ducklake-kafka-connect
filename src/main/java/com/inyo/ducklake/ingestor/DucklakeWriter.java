@@ -53,7 +53,7 @@ public final class DucklakeWriter implements AutoCloseable {
     } catch (SQLException e) {
       throw new RuntimeException("Failed to duplicate DuckDB connection for writer", e);
     }
-    this.tableManager = new DucklakeTableManager(this.connection, config, metrics);
+    this.tableManager = new DucklakeTableManager(this.connection, config);
   }
 
   // Ensure schema (create/evolve) then insert rows
