@@ -38,15 +38,14 @@ public class DucklakeConnectionFactory {
     if (this.conn != null) {
       return;
     }
-    final Properties properties = getProperties();
-    this.conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
-    final String statement = buildAttachStatement();
-    this.conn.createStatement().execute("INSTALL httpfs;");
-    this.conn.createStatement().execute("LOAD httpfs;");
+    this.conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", getProperties());
+    final var statement = buildAttachStatement();
     try (var st = conn.createStatement()) {
+      st.execute("INSTALL httpfs;");
+      st.execute("LOAD httpfs;");
       st.execute(statement);
       // Configure DuckLake retry count for handling PostgreSQL serialization conflicts
-      int maxRetryCount = config.getDucklakeMaxRetryCount();
+      final var maxRetryCount = config.getDucklakeMaxRetryCount();
       st.execute("SET ducklake_max_retry_count = " + maxRetryCount);
     }
   }
