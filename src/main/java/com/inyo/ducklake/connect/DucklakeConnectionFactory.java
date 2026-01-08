@@ -39,10 +39,33 @@ public class DucklakeConnectionFactory {
       return;
     }
     this.conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", getProperties());
-    final var statement = buildAttachStatement();
+    var statement = buildAttachStatement();
     try (var st = conn.createStatement()) {
       st.execute("INSTALL httpfs;");
       st.execute("LOAD httpfs;");
+
+      // After httpfs is loaded, configure S3/httpfs-related settings via SET statements.
+      final var s3UrlStyle = config.getS3UrlStyle();
+      if (s3UrlStyle != null && !s3UrlStyle.isBlank()) {
+        st.execute("SET s3_url_style = '" + s3UrlStyle.replace("'", "''") + "'");
+      }
+      final var s3UseSsl = config.getS3UseSsl();
+      if (s3UseSsl != null && !s3UseSsl.isBlank()) {
+        st.execute("SET s3_use_ssl = '" + s3UseSsl.replace("'", "''") + "'");
+      }
+      final var s3Endpoint = config.getS3Endpoint();
+      if (s3Endpoint != null && !s3Endpoint.isBlank()) {
+        st.execute("SET s3_endpoint = '" + s3Endpoint.replace("'", "''") + "'");
+      }
+      final var s3AccessKey = config.getS3AccessKeyId();
+      if (s3AccessKey != null && !s3AccessKey.isBlank()) {
+        st.execute("SET s3_access_key_id = '" + s3AccessKey.replace("'", "''") + "'");
+      }
+      final var s3Secret = config.getS3SecretAccessKey();
+      if (s3Secret != null && !s3Secret.isBlank()) {
+        st.execute("SET s3_secret_access_key = '" + s3Secret.replace("'", "''") + "'");
+      }
+
       st.execute(statement);
       // Configure DuckLake retry count for handling PostgreSQL serialization conflicts
       final var maxRetryCount = config.getDucklakeMaxRetryCount();
@@ -52,13 +75,9 @@ public class DucklakeConnectionFactory {
 
   @NonNull
   private Properties getProperties() {
-    final Properties properties = new Properties();
-    properties.setProperty("s3_url_style", config.getS3UrlStyle());
-    properties.setProperty("s3_use_ssl", config.getS3UseSsl());
-    properties.setProperty("s3_endpoint", config.getS3Endpoint());
-    properties.setProperty("s3_access_key_id", config.getS3AccessKeyId());
-    properties.setProperty("s3_secret_access_key", config.getS3SecretAccessKey());
-    int threadCount = config.getDuckDbThreads();
+    var properties = new Properties();
+    // Only pass properties that do not require httpfs at startup (threads only).
+    var threadCount = config.getDuckDbThreads();
     properties.setProperty("threads", String.valueOf(threadCount));
     return properties;
   }
