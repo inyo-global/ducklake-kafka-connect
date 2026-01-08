@@ -110,3 +110,14 @@ All classes use SLF4J logging:
 ```java
 private static final Logger LOG = LoggerFactory.getLogger(ClassName.class);
 ```
+
+## GitHub Repository
+
+This is a fork. Always create PRs on the **PostHog** repo, not upstream:
+- **origin**: `PostHog/ducklake-kafka-connect` (CREATE PRs HERE)
+- **upstream**: `inyo-global/ducklake-kafka-connect` (DO NOT create PRs here)
+
+When creating PRs, explicitly specify the repo:
+```bash
+gh pr create --repo PostHog/ducklake-kafka-connect
+```

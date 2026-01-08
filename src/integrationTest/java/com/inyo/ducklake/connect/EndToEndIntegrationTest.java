@@ -22,6 +22,7 @@ import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import java.sql.SQLException;
 import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
@@ -50,7 +51,8 @@ class EndToEndIntegrationTest {
   public static final KafkaContainer kafkaContainer =
       new KafkaContainer("apache/kafka-native:4.0.0")
           .withNetwork(network)
-          .withNetworkAliases("kafka");
+          .withNetworkAliases("kafka")
+          .withStartupTimeout(Duration.of(3, ChronoUnit.MINUTES));
 
   @Container
   @SuppressWarnings("resource")

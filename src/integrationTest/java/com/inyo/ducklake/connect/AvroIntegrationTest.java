@@ -19,6 +19,7 @@ import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Properties;
@@ -54,7 +55,8 @@ class AvroIntegrationTest {
   public static final KafkaContainer kafkaContainer =
       new KafkaContainer("apache/kafka-native:4.0.0")
           .withNetwork(network)
-          .withNetworkAliases("kafka");
+          .withNetworkAliases("kafka")
+          .withStartupTimeout(Duration.of(3, ChronoUnit.MINUTES));
 
   @Container
   @SuppressWarnings("resource")

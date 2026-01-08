@@ -371,6 +371,126 @@ class ArrowSchemaMergeTest {
   }
 
   @Nested
+  @DisplayName("String-Timestamp Type Mismatch Tests")
+  class StringTimestampTypeMismatchTests {
+
+    @Test
+    @DisplayName("Should throw error when mixing string and timestamp types")
+    void shouldThrowErrorWhenMixingStringAndTimestampTypes() {
+      // Given - one schema has a field as string, another has it as timestamp
+      // This simulates the distinct_id bug where some records incorrectly inferred timestamp
+      Field stringField = createField("distinct_id", ArrowType.Utf8.INSTANCE, false);
+      Field timestampField =
+          createField(
+              "distinct_id",
+              new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, null),
+              false);
+
+      Schema schema1 = new Schema(Collections.singletonList(stringField));
+      Schema schema2 = new Schema(Collections.singletonList(timestampField));
+
+      // When/Then - should throw error, not silently unify
+      // This allows the error to be caught at record level and routed to DLQ
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new));
+    }
+
+    @Test
+    @DisplayName("Should throw error when mixing string and date types")
+    void shouldThrowErrorWhenMixingStringAndDateTypes() {
+      // Given
+      Field stringField = createField("created_date", ArrowType.Utf8.INSTANCE, false);
+      Field dateField =
+          createField(
+              "created_date",
+              new ArrowType.Date(org.apache.arrow.vector.types.DateUnit.DAY),
+              false);
+
+      Schema schema1 = new Schema(Collections.singletonList(stringField));
+      Schema schema2 = new Schema(Collections.singletonList(dateField));
+
+      // When/Then - should throw error
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new));
+    }
+
+    @Test
+    @DisplayName("Should throw error when mixing string and time types")
+    void shouldThrowErrorWhenMixingStringAndTimeTypes() {
+      // Given
+      Field stringField = createField("event_time", ArrowType.Utf8.INSTANCE, false);
+      Field timeField =
+          createField(
+              "event_time",
+              new ArrowType.Time(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, 32),
+              false);
+
+      Schema schema1 = new Schema(Collections.singletonList(stringField));
+      Schema schema2 = new Schema(Collections.singletonList(timeField));
+
+      // When/Then - should throw error
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new));
+    }
+
+    @Test
+    @DisplayName("Should still unify pure timestamp types correctly")
+    void shouldStillUnifyPureTimestampTypesCorrectly() {
+      // Given - both schemas have timestamp, should still unify to timestamp
+      Field timestampField1 =
+          createField(
+              "created_at",
+              new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, null),
+              false);
+      Field timestampField2 =
+          createField(
+              "created_at",
+              new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MICROSECOND, null),
+              false);
+
+      Schema schema1 = new Schema(Collections.singletonList(timestampField1));
+      Schema schema2 = new Schema(Collections.singletonList(timestampField2));
+
+      // When
+      Schema unified = ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new);
+
+      // Then - should unify to timestamp
+      assertEquals(1, unified.getFields().size());
+      Field unifiedField = unified.getFields().get(0);
+      assertInstanceOf(ArrowType.Timestamp.class, unifiedField.getFieldType().getType());
+    }
+
+    @Test
+    @DisplayName("Error message should include field name and conflicting types")
+    void errorMessageShouldIncludeFieldNameAndConflictingTypes() {
+      // Given
+      Field stringField = createField("distinct_id", ArrowType.Utf8.INSTANCE, false);
+      Field timestampField =
+          createField(
+              "distinct_id",
+              new ArrowType.Timestamp(org.apache.arrow.vector.types.TimeUnit.MILLISECOND, null),
+              false);
+
+      Schema schema1 = new Schema(Collections.singletonList(stringField));
+      Schema schema2 = new Schema(Collections.singletonList(timestampField));
+
+      // When/Then
+      var exception =
+          assertThrows(
+              IllegalArgumentException.class,
+              () -> ArrowSchemaMerge.unifySchemas(Arrays.asList(schema1, schema2), HashMap::new));
+
+      // Error message should help identify the problem
+      assertTrue(exception.getMessage().contains("distinct_id"));
+      assertTrue(
+          exception.getMessage().contains("Timestamp") || exception.getMessage().contains("Utf8"));
+    }
+  }
+
+  @Nested
   @DisplayName("Enhanced Error Messaging Tests")
   class EnhancedErrorMessagingTests {
 

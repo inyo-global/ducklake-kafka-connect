@@ -20,26 +20,40 @@ import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.ReentrantLock;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
+import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.arrow.vector.types.pojo.Field;
+import org.apache.arrow.vector.types.pojo.Schema;
+import org.apache.arrow.vector.util.VectorBatchAppender;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.metrics.Metrics;
+import org.apache.kafka.connect.errors.ConnectException;
+import org.apache.kafka.connect.sink.ErrantRecordReporter;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.apache.kafka.connect.sink.SinkTaskContext;
 
+/**
+ * Kafka Connect sink task that writes records to DuckLake.
+ *
+ * <p>This implementation embraces Kafka Connect's single-threaded task model:
+ *
+ * <ul>
+ *   <li>put() is called by a single worker thread - no locking needed
+ *   <li>preCommit() handles time-based flushing (called at offset.flush.interval.ms)
+ *   <li>Size/count thresholds are checked inline in put() for immediate flushes
+ * </ul>
+ *
+ * <p>This design eliminates the need for background schedulers, thread pools, and locking
+ * primitives that were previously used for time-based flushing.
+ */
 public class DucklakeSinkTask extends SinkTask {
   private static final Logger LOG = LoggerFactory.getLogger(DucklakeSinkTask.class);
   private DucklakeSinkConfig config;
@@ -48,32 +62,20 @@ public class DucklakeSinkTask extends SinkTask {
   private Map<TopicPartition, DucklakeWriter> writers;
   private BufferAllocator allocator;
   private SinkRecordToArrowConverter converter;
-  private DucklakeMetrics metrics;
-  private SinkTaskContext context;
 
-  // Buffering state
+  // Buffering state - single-threaded access, no synchronization needed
   private Map<TopicPartition, PartitionBuffer> buffers;
   private int flushSize;
-  private long flushIntervalMs;
   private long fileSizeBytes;
-  private ScheduledExecutorService flushScheduler;
 
-  // Per-partition locks to allow parallel processing across partitions
-  private final ConcurrentHashMap<TopicPartition, ReentrantLock> partitionLocks =
-      new ConcurrentHashMap<>();
-
-  // Track skipped time-based flushes per partition
-  private final ConcurrentHashMap<TopicPartition, AtomicInteger> consecutiveFlushSkips =
-      new ConcurrentHashMap<>();
-  private static final int MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING = 5;
-  private static final long FLUSH_LOCK_TIMEOUT_MS = 100;
+  // Errant record reporter for sending bad records to DLQ
+  private ErrantRecordReporter errantRecordReporter;
 
   /** Per-partition buffer to accumulate records before writing */
   private static class PartitionBuffer {
     final List<VectorSchemaRoot> pendingBatches = new ArrayList<>();
     long recordCount = 0;
     long estimatedBytes = 0;
-    long lastFlushTime = System.currentTimeMillis();
 
     void add(VectorSchemaRoot root) {
       pendingBatches.add(root);
@@ -82,48 +84,39 @@ public class DucklakeSinkTask extends SinkTask {
       estimatedBytes += root.getFieldVectors().stream().mapToLong(v -> v.getBufferSize()).sum();
     }
 
-    void clear() {
-      // Close all VectorSchemaRoot to free memory
+    void reset() {
+      pendingBatches.clear();
+      recordCount = 0;
+      estimatedBytes = 0;
+    }
+
+    void close() {
       for (VectorSchemaRoot root : pendingBatches) {
         try {
           root.close();
         } catch (Exception e) {
-          // Ignore close errors during clear
+          // Ignore close errors during cleanup
         }
       }
-      pendingBatches.clear();
-      recordCount = 0;
-      estimatedBytes = 0;
-      lastFlushTime = System.currentTimeMillis();
+      reset();
     }
 
-    boolean shouldFlush(int flushSize, long fileSizeBytes, long flushIntervalMs) {
+    boolean isEmpty() {
+      return pendingBatches.isEmpty();
+    }
+
+    /** Check if size/count thresholds are exceeded (time-based flush handled by preCommit) */
+    boolean shouldFlush(int flushSize, long fileSizeBytes) {
       if (pendingBatches.isEmpty()) {
         return false;
       }
-      // Flush if any threshold is exceeded
-      if (recordCount >= flushSize) {
-        return true;
-      }
-      if (estimatedBytes >= fileSizeBytes) {
-        return true;
-      }
-      if (System.currentTimeMillis() - lastFlushTime >= flushIntervalMs) {
-        return true;
-      }
-      return false;
+      return recordCount >= flushSize || estimatedBytes >= fileSizeBytes;
     }
   }
 
   @Override
   public String version() {
     return DucklakeSinkConfig.VERSION;
-  }
-
-  @Override
-  public void initialize(SinkTaskContext context) {
-    super.initialize(context);
-    this.context = context;
   }
 
   @Override
@@ -137,105 +130,27 @@ public class DucklakeSinkTask extends SinkTask {
 
     // Initialize buffering configuration
     this.flushSize = config.getFlushSize();
-    this.flushIntervalMs = config.getFlushIntervalMs();
     this.fileSizeBytes = config.getFileSizeBytes();
 
     LOG.info(
-        "Buffering config: flushSize={}, flushIntervalMs={}, fileSizeBytes={}",
+        "Buffering config: flushSize={}, fileSizeBytes={} "
+            + "(time-based flush controlled by offset.flush.interval.ms)",
         flushSize,
-        flushIntervalMs,
         fileSizeBytes);
 
-    // Start scheduled flush checker (runs every 1 second to check time-based flush)
-    this.flushScheduler =
-        Executors.newSingleThreadScheduledExecutor(
-            r -> {
-              Thread t = new Thread(r, "ducklake-flush-scheduler");
-              t.setDaemon(true);
-              return t;
-            });
-    flushScheduler.scheduleAtFixedRate(this::checkTimeBasedFlush, 1, 1, TimeUnit.SECONDS);
-  }
-
-  /** Periodic check for time-based flush - uses per-partition locking */
-  private void checkTimeBasedFlush() {
-    long now = System.currentTimeMillis();
-
-    for (Map.Entry<TopicPartition, PartitionBuffer> entry : buffers.entrySet()) {
-      TopicPartition partition = entry.getKey();
-      PartitionBuffer buffer = entry.getValue();
-
-      // Skip if buffer is empty or not due for flush
-      if (buffer.pendingBatches.isEmpty() || (now - buffer.lastFlushTime) < flushIntervalMs) {
-        continue;
+    // Initialize errant record reporter for DLQ support (may be null if not configured)
+    try {
+      this.errantRecordReporter = context.errantRecordReporter();
+      if (errantRecordReporter != null) {
+        LOG.info("Errant record reporter initialized - bad records will be sent to DLQ");
+      } else {
+        LOG.info("No errant record reporter available - bad records will cause task failure");
       }
-
-      // Try to acquire per-partition lock
-      ReentrantLock lock = partitionLocks.computeIfAbsent(partition, k -> new ReentrantLock());
-      boolean lockAcquired = false;
-      try {
-        lockAcquired = lock.tryLock(FLUSH_LOCK_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        return;
-      }
-
-      if (!lockAcquired) {
-        AtomicInteger skips =
-            consecutiveFlushSkips.computeIfAbsent(partition, k -> new AtomicInteger(0));
-        int skipCount = skips.incrementAndGet();
-        if (skipCount >= MAX_CONSECUTIVE_SKIPS_BEFORE_WARNING) {
-          LOG.warn(
-              "Flush check for partition {} skipped {} times - possible lock contention",
-              partition,
-              skipCount);
-        }
-        continue;
-      }
-
-      try {
-        // Reset skip counter on successful lock acquisition
-        consecutiveFlushSkips.computeIfAbsent(partition, k -> new AtomicInteger(0)).set(0);
-
-        // Re-check condition under lock (double-check pattern)
-        if (!buffer.pendingBatches.isEmpty() && (now - buffer.lastFlushTime) >= flushIntervalMs) {
-          LOG.info(
-              "Time-based flush triggered for partition {} (age={}ms, records={}, bytes={})",
-              partition,
-              now - buffer.lastFlushTime,
-              buffer.recordCount,
-              buffer.estimatedBytes);
-          flushPartition(partition);
-        }
-      } catch (Exception e) {
-        LOG.warn("Error during time-based flush for partition {}: {}", partition, e.getMessage());
-      } finally {
-        lock.unlock();
-      }
+    } catch (NoSuchMethodError | NoClassDefFoundError e) {
+      // Older Kafka Connect versions may not have errantRecordReporter()
+      LOG.warn("ErrantRecordReporter not available in this Kafka Connect version");
+      this.errantRecordReporter = null;
     }
-    // Initialize metrics - use Kafka's metrics from context or create new instance
-    var metricsRegistry = getMetricsRegistry();
-    var connectorName = map.getOrDefault("name", "ducklake-sink");
-    var taskId = map.getOrDefault("task.id", "0");
-    this.metrics = new DucklakeMetrics(metricsRegistry, connectorName, taskId);
-
-    LOG.log(
-        System.Logger.Level.INFO,
-        "Started DucklakeSinkTask with metrics enabled for connector={0}, task={1}",
-        connectorName,
-        taskId);
-  }
-
-  /**
-   * Gets the metrics registry from the context, or creates a new one if not available.
-   *
-   * @return the Metrics instance
-   */
-  private Metrics getMetricsRegistry() {
-    // In Kafka Connect, the metrics registry is typically available through the context
-    // However, the API doesn't expose it directly, so we create our own instance
-    // that will still be registered with JMX automatically
-    return new Metrics();
   }
 
   @Override
@@ -246,8 +161,7 @@ public class DucklakeSinkTask extends SinkTask {
     super.open(partitions);
     try {
       this.connectionFactory.create();
-      this.writerFactory =
-          new DucklakeWriterFactory(config, connectionFactory.getConnection(), metrics);
+      this.writerFactory = new DucklakeWriterFactory(config, connectionFactory.getConnection());
 
       // Create one writer and buffer for each partition
       for (TopicPartition partition : partitions) {
@@ -270,165 +184,344 @@ public class DucklakeSinkTask extends SinkTask {
       return;
     }
 
-    // Group records by partition first (no lock needed)
+    // Group records by partition
     Map<TopicPartition, List<SinkRecord>> recordsByPartition =
         SinkRecordToArrowConverter.groupRecordsByPartition(records);
-    try {
-      // Record batch size metric
-      metrics.recordBatchProcessed(records.size());
 
+    // Process each partition sequentially (single-threaded, no locking needed)
+    for (Map.Entry<TopicPartition, List<SinkRecord>> entry : recordsByPartition.entrySet()) {
+      processPartition(entry.getKey(), entry.getValue());
+    }
+  }
+
+  /**
+   * Called by the framework before committing offsets (at offset.flush.interval.ms).
+   *
+   * <p>This is where we handle time-based flushing - the framework guarantees this is called
+   * periodically, so we don't need our own background scheduler.
+   */
+  @Override
+  public Map<TopicPartition, OffsetAndMetadata> preCommit(
+      Map<TopicPartition, OffsetAndMetadata> currentOffsets) {
+    // Flush all non-empty buffers (time-based flush)
+    for (Map.Entry<TopicPartition, PartitionBuffer> entry : buffers.entrySet()) {
+      TopicPartition partition = entry.getKey();
+      PartitionBuffer buffer = entry.getValue();
+
+      if (!buffer.isEmpty()) {
+        LOG.info(
+            "Time-based flush for partition {} (preCommit): records={}, bytes={}",
+            partition,
+            buffer.recordCount,
+            buffer.estimatedBytes);
+        flushPartition(partition);
+      }
+    }
+
+    return currentOffsets;
+  }
+
+  /** Process records for a single partition - buffer and flush if thresholds exceeded. */
+  private void processPartition(TopicPartition partition, List<SinkRecord> partitionRecords) {
+    try {
       // Detect if we have Arrow IPC data (VectorSchemaRoot) or traditional data
       boolean hasArrowIpcData =
-          records.stream().anyMatch(record -> record.value() instanceof VectorSchemaRoot);
+          partitionRecords.stream().anyMatch(record -> record.value() instanceof VectorSchemaRoot);
 
-    // Process each partition with its own lock
-    for (Map.Entry<TopicPartition, List<SinkRecord>> entry : recordsByPartition.entrySet()) {
-      TopicPartition partition = entry.getKey();
-      List<SinkRecord> partitionRecords = entry.getValue();
-
-      ReentrantLock lock = partitionLocks.computeIfAbsent(partition, k -> new ReentrantLock());
-      lock.lock();
-      try {
-        // Detect if we have Arrow IPC data (VectorSchemaRoot) or traditional data
-        boolean hasArrowIpcData =
-            partitionRecords.stream()
-                .anyMatch(record -> record.value() instanceof VectorSchemaRoot);
-
-        if (hasArrowIpcData) {
-          bufferArrowIpcRecordsForPartition(partition, partitionRecords);
-        } else {
-          bufferTraditionalRecordsForPartition(partition, partitionRecords);
-        }
-
-        // Check if this partition needs flushing
-        checkAndFlushPartition(partition);
-      } catch (Exception e) {
-        // Build a concise metadata sample for easier debugging (topic:partition@offset)
-        var sb = new StringBuilder();
-        sb.append("Error processing records for partition ")
-            .append(partition)
-            .append(". batchSize=")
-            .append(partitionRecords.size())
-            .append(". sampleOffsets=");
-        var idx = 0;
-        for (SinkRecord r : partitionRecords) {
-          var offset = String.valueOf(r.kafkaOffset());
-          sb.append("[")
-              .append(r.topic())
-              .append(":")
-              .append(r.kafkaPartition())
-              .append("@")
-              .append(offset)
-              .append("]");
-          if (++idx >= 10) {
-            sb.append("(truncated)");
-            break;
-          } else {
-            sb.append(',');
-          }
-        }
-        LOG.error(sb.toString(), e);
-        throw new RuntimeException("Failed to process sink records", e);
-      } finally {
-        lock.unlock();
-      }
-    }
-  }
-
-  /** Check a single partition and flush if thresholds exceeded (called under partition lock) */
-  private void checkAndFlushPartition(TopicPartition partition) {
-    PartitionBuffer buffer = buffers.get(partition);
-    if (buffer == null) {
-      return;
-    }
-
-    // Check for global memory pressure from Arrow allocator
-    long allocatedMemory = allocator.getAllocatedMemory();
-    boolean memoryPressure = allocatedMemory > fileSizeBytes * buffers.size();
-
-    if (memoryPressure && !buffer.pendingBatches.isEmpty()) {
-      LOG.warn(
-          "Memory pressure detected for partition {}: allocatorBytes={}, threshold={}",
-          partition,
-          allocatedMemory,
-          fileSizeBytes * buffers.size());
-    }
-
-    // Flush if normal thresholds exceeded OR if under memory pressure with data buffered
-    boolean shouldFlush =
-        buffer.shouldFlush(flushSize, fileSizeBytes, flushIntervalMs)
-            || (memoryPressure && !buffer.pendingBatches.isEmpty());
-
-    if (shouldFlush) {
-      String reason;
-      if (memoryPressure && !buffer.shouldFlush(flushSize, fileSizeBytes, flushIntervalMs)) {
-        reason = "memory pressure";
-      } else if (buffer.recordCount >= flushSize) {
-        reason = "record count";
-      } else if (buffer.estimatedBytes >= fileSizeBytes) {
-        reason = "file size";
+      if (hasArrowIpcData) {
+        bufferArrowIpcRecordsForPartition(partition, partitionRecords);
       } else {
-        reason = "time interval";
+        bufferTraditionalRecordsForPartition(partition, partitionRecords);
       }
-      LOG.info(
-          "Flush triggered for partition {} (reason={}, records={}, bytes={})",
-          partition,
-          reason,
-          buffer.recordCount,
-          buffer.estimatedBytes);
-      flushPartition(partition);
+
+      // Check if this partition needs flushing (size/count thresholds only)
+      PartitionBuffer buffer = buffers.get(partition);
+      if (buffer != null && buffer.shouldFlush(flushSize, fileSizeBytes)) {
+        String reason = buffer.recordCount >= flushSize ? "record count" : "file size";
+        LOG.info(
+            "Flush triggered for partition {} (reason={}, records={}, bytes={})",
+            partition,
+            reason,
+            buffer.recordCount,
+            buffer.estimatedBytes);
+        flushPartition(partition);
+      }
+    } catch (Exception e) {
+      // Build a concise metadata sample for easier debugging (topic:partition@offset)
+      var sb = new StringBuilder();
+      sb.append("Error processing records for partition ")
+          .append(partition)
+          .append(". batchSize=")
+          .append(partitionRecords.size())
+          .append(". sampleOffsets=");
+      var idx = 0;
+      for (SinkRecord r : partitionRecords) {
+        var offset = String.valueOf(r.kafkaOffset());
+        sb.append("[")
+            .append(r.topic())
+            .append(":")
+            .append(r.kafkaPartition())
+            .append("@")
+            .append(offset)
+            .append("]");
+        if (++idx >= 10) {
+          sb.append("(truncated)");
+          break;
+        } else {
+          sb.append(',');
+        }
+      }
+      LOG.error(sb.toString(), e);
+      throw new RuntimeException("Failed to process sink records", e);
     }
   }
 
-  /** Flush all buffered data for a partition */
+  /** Flush all buffered data for a partition. */
   private void flushPartition(TopicPartition partition) {
     PartitionBuffer buffer = buffers.get(partition);
-    if (buffer == null || buffer.pendingBatches.isEmpty()) {
+    if (buffer == null || buffer.isEmpty()) {
       return;
     }
 
     DucklakeWriter writer = writers.get(partition);
     if (writer == null) {
-      LOG.warn("No writer found for partition: {}", partition);
-      buffer.clear();
+      LOG.warn(
+          "No writer found for partition: {}, closing {} batches",
+          partition,
+          buffer.pendingBatches.size());
+      buffer.close();
       return;
     }
+
+    // Extract batches for writing
+    List<VectorSchemaRoot> batches = new ArrayList<>(buffer.pendingBatches);
+    long recordCount = buffer.recordCount;
+    long estimatedBytes = buffer.estimatedBytes;
+
+    // Reset buffer state before I/O (batches will be closed after write)
+    buffer.reset();
 
     long actualAllocatedBytes = allocator.getAllocatedMemory();
     LOG.info(
         "Flushing partition {}: {} batches, {} records, estimatedBytes={}, allocatorBytes={}",
         partition,
-        buffer.pendingBatches.size(),
-        buffer.recordCount,
-        buffer.estimatedBytes,
+        batches.size(),
+        recordCount,
+        estimatedBytes,
         actualAllocatedBytes);
 
-    // Write each buffered batch
-    for (VectorSchemaRoot root : buffer.pendingBatches) {
-      try {
-        writer.write(root);
-      } catch (Exception e) {
-        LOG.error("Failed to write buffered data for partition: {}", partition, e);
-        // Clear buffer to avoid memory leaks even on failure
-        buffer.clear();
-        throw new RuntimeException("Failed to flush buffered data", e);
-      } finally {
-        try {
-          root.close();
-        } catch (Exception closeEx) {
-          LOG.warn("Failed to close VectorSchemaRoot: {}", closeEx.getMessage());
+    VectorSchemaRoot consolidatedRoot = null;
+    try {
+      consolidatedRoot = consolidateBatches(batches);
+      if (consolidatedRoot != null && consolidatedRoot.getRowCount() > 0) {
+        // Consolidated successfully - write single batch
+        writer.write(consolidatedRoot);
+      } else if (consolidatedRoot == null && !batches.isEmpty()) {
+        // Consolidation failed (schema mismatch) - fall back to writing individually
+        LOG.info(
+            "Writing {} batches individually for partition {} due to schema differences",
+            batches.size(),
+            partition);
+        for (VectorSchemaRoot root : batches) {
+          if (root.getRowCount() > 0) {
+            writer.write(root);
+          }
         }
+      }
+    } catch (Exception e) {
+      LOG.error("Failed to write buffered data for partition: {}", partition, e);
+      throw new RuntimeException("Failed to flush buffered data", e);
+    } finally {
+      // Close the consolidated root
+      if (consolidatedRoot != null) {
+        try {
+          consolidatedRoot.close();
+        } catch (Exception closeEx) {
+          LOG.warn("Failed to close consolidated VectorSchemaRoot: {}", closeEx.getMessage());
+        }
+      }
+      // Close all original batch roots
+      closeBatches(batches);
+    }
+  }
+
+  /** Close a list of VectorSchemaRoot batches, logging any errors. */
+  private void closeBatches(List<VectorSchemaRoot> batches) {
+    for (VectorSchemaRoot root : batches) {
+      try {
+        root.close();
+      } catch (Exception closeEx) {
+        LOG.warn("Failed to close VectorSchemaRoot: {}", closeEx.getMessage());
+      }
+    }
+  }
+
+  /**
+   * Checks if all batches have compatible schemas for consolidation. Schemas are compatible if they
+   * have the same fields in the same order with the same types. This method ignores field and
+   * schema metadata, which can differ between batches even when the actual data types are the same.
+   */
+  private boolean haveSameSchema(List<VectorSchemaRoot> batches) {
+    if (batches.size() <= 1) {
+      return true;
+    }
+    Schema firstSchema = batches.get(0).getSchema();
+    for (int i = 1; i < batches.size(); i++) {
+      Schema otherSchema = batches.get(i).getSchema();
+      if (!schemasAreCompatible(firstSchema, otherSchema)) {
+        LOG.debug(
+            "Schema mismatch between batch 0 and batch {}: {} vs {}", i, firstSchema, otherSchema);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Checks if two schemas are compatible for consolidation. Compatible means they have the same
+   * number of fields, and each field has the same name, type, and nullability. Metadata differences
+   * are ignored since they don't affect data compatibility.
+   */
+  private boolean schemasAreCompatible(Schema schema1, Schema schema2) {
+    List<Field> fields1 = schema1.getFields();
+    List<Field> fields2 = schema2.getFields();
+
+    if (fields1.size() != fields2.size()) {
+      return false;
+    }
+
+    for (int i = 0; i < fields1.size(); i++) {
+      Field f1 = fields1.get(i);
+      Field f2 = fields2.get(i);
+
+      // Compare field name, type, and nullability (ignore metadata)
+      if (!f1.getName().equals(f2.getName())) {
+        return false;
+      }
+      if (!f1.getType().equals(f2.getType())) {
+        return false;
+      }
+      if (f1.isNullable() != f2.isNullable()) {
+        return false;
+      }
+      // For complex types with children, recursively check child fields
+      if (!childFieldsAreCompatible(f1.getChildren(), f2.getChildren())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Recursively checks if child fields are compatible. This handles nested types like structs and
+   * lists.
+   */
+  private boolean childFieldsAreCompatible(List<Field> children1, List<Field> children2) {
+    if (children1.size() != children2.size()) {
+      return false;
+    }
+    for (int i = 0; i < children1.size(); i++) {
+      Field c1 = children1.get(i);
+      Field c2 = children2.get(i);
+      if (!c1.getName().equals(c2.getName())) {
+        return false;
+      }
+      if (!c1.getType().equals(c2.getType())) {
+        return false;
+      }
+      if (c1.isNullable() != c2.isNullable()) {
+        return false;
+      }
+      if (!childFieldsAreCompatible(c1.getChildren(), c2.getChildren())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Consolidates multiple VectorSchemaRoot batches into a single VectorSchemaRoot. This reduces the
+   * number of write operations to DuckLake, improving throughput. Returns null if batches have
+   * incompatible schemas (caller should fall back to writing individually).
+   */
+  private VectorSchemaRoot consolidateBatches(List<VectorSchemaRoot> batches) {
+    if (batches == null || batches.isEmpty()) {
+      return null;
+    }
+
+    // Check if all batches have compatible schemas
+    if (!haveSameSchema(batches)) {
+      LOG.warn(
+          "Cannot consolidate {} batches due to schema mismatch - will write individually",
+          batches.size());
+      return null;
+    }
+
+    if (batches.size() == 1) {
+      // Single batch - no consolidation needed, but we need to copy it since
+      // the original will be closed separately
+      VectorSchemaRoot source = batches.get(0);
+      VectorSchemaRoot copy = VectorSchemaRoot.create(source.getSchema(), allocator);
+      try {
+        copy.allocateNew();
+        for (int i = 0; i < source.getFieldVectors().size(); i++) {
+          FieldVector sourceVector = source.getFieldVectors().get(i);
+          FieldVector targetVector = copy.getFieldVectors().get(i);
+          for (int row = 0; row < source.getRowCount(); row++) {
+            targetVector.copyFromSafe(row, row, sourceVector);
+          }
+        }
+        copy.setRowCount(source.getRowCount());
+        return copy;
+      } catch (Exception e) {
+        // Clean up on failure to prevent memory leak
+        try {
+          copy.close();
+        } catch (Exception closeEx) {
+          LOG.warn("Failed to close copy root during cleanup: {}", closeEx.getMessage());
+        }
+        throw e;
       }
     }
 
-    // Clear the buffer (VectorSchemaRoots already closed in loop above)
-    buffer.pendingBatches.clear();
-    buffer.recordCount = 0;
-    buffer.estimatedBytes = 0;
-    buffer.lastFlushTime = System.currentTimeMillis();
+    // Use schema from first batch
+    Schema schema = batches.get(0).getSchema();
+
+    // Calculate total row count
+    int totalRows = batches.stream().mapToInt(VectorSchemaRoot::getRowCount).sum();
+
+    // Create consolidated root
+    VectorSchemaRoot consolidated = VectorSchemaRoot.create(schema, allocator);
+    try {
+      consolidated.allocateNew();
+
+      // Copy data from each batch using VectorBatchAppender
+      VectorSchemaRoot[] batchArray = batches.toArray(new VectorSchemaRoot[0]);
+      for (int i = 0; i < consolidated.getFieldVectors().size(); i++) {
+        FieldVector targetVector = consolidated.getFieldVectors().get(i);
+        FieldVector[] sourceVectors = new FieldVector[batchArray.length];
+        for (int j = 0; j < batchArray.length; j++) {
+          sourceVectors[j] = batchArray[j].getFieldVectors().get(i);
+        }
+        VectorBatchAppender.batchAppend(targetVector, sourceVectors);
+      }
+
+      consolidated.setRowCount(totalRows);
+      LOG.debug(
+          "Consolidated {} batches into single batch with {} rows", batches.size(), totalRows);
+      return consolidated;
+    } catch (Exception e) {
+      // Clean up on failure to prevent memory leak
+      try {
+        consolidated.close();
+      } catch (Exception closeEx) {
+        LOG.warn("Failed to close consolidated root during cleanup: {}", closeEx.getMessage());
+      }
+      throw e;
+    }
   }
 
-  /** Buffer Arrow IPC records for a single partition (called under partition lock) */
+  /** Buffer Arrow IPC records for a single partition */
   private void bufferArrowIpcRecordsForPartition(
       TopicPartition partition, List<SinkRecord> records) {
     LOG.debug("Buffering {} Arrow IPC records for partition {}", records.size(), partition);
@@ -460,7 +553,7 @@ public class DucklakeSinkTask extends SinkTask {
     }
   }
 
-  /** Buffer traditional records for a single partition (called under partition lock) */
+  /** Buffer traditional records for a single partition */
   private void bufferTraditionalRecordsForPartition(
       TopicPartition partition, List<SinkRecord> records) {
     LOG.debug("Buffering {} traditional records for partition {}", records.size(), partition);
@@ -475,12 +568,142 @@ public class DucklakeSinkTask extends SinkTask {
     Map<TopicPartition, List<SinkRecord>> singlePartitionMap = new HashMap<>();
     singlePartitionMap.put(partition, records);
 
-    Map<TopicPartition, VectorSchemaRoot> vectorsByPartition =
-        converter.convertRecordsByPartition(singlePartitionMap);
+    try {
+      // Fast path: try batch conversion
+      Map<TopicPartition, VectorSchemaRoot> vectorsByPartition =
+          converter.convertRecordsByPartition(singlePartitionMap);
 
-    VectorSchemaRoot vectorSchemaRoot = vectorsByPartition.get(partition);
-    if (vectorSchemaRoot != null) {
-      buffer.add(vectorSchemaRoot);
+      VectorSchemaRoot vectorSchemaRoot = vectorsByPartition.get(partition);
+      if (vectorSchemaRoot != null) {
+        buffer.add(vectorSchemaRoot);
+      }
+    } catch (RuntimeException e) {
+      // Check if this is a schema conflict error (e.g., string vs timestamp type mismatch)
+      if (isSchemaConflictError(e)) {
+        LOG.warn(
+            "Schema conflict detected for partition {}, attempting per-record conversion to "
+                + "identify bad records: {}",
+            partition,
+            e.getMessage());
+        handleSchemaConflictWithDLQ(partition, records, buffer, e);
+      } else {
+        // Re-throw non-schema errors
+        throw e;
+      }
+    }
+  }
+
+  /**
+   * Checks if an exception is caused by a schema conflict (e.g., incompatible types like string vs
+   * timestamp).
+   */
+  private boolean isSchemaConflictError(Throwable e) {
+    // Check the exception chain for schema-related errors
+    Throwable current = e;
+    while (current != null) {
+      String message = current.getMessage();
+      if (message != null
+          && (message.contains("Cannot unify incompatible types")
+              || message.contains("Incompatible type for column")
+              || message.contains("conflicting types"))) {
+        return true;
+      }
+      current = current.getCause();
+    }
+    return false;
+  }
+
+  /**
+   * Handles schema conflicts by converting records one-by-one to identify bad records and routing
+   * them to DLQ.
+   */
+  private void handleSchemaConflictWithDLQ(
+      TopicPartition partition,
+      List<SinkRecord> records,
+      PartitionBuffer buffer,
+      RuntimeException originalError) {
+
+    if (errantRecordReporter == null) {
+      // No DLQ configured - fail the entire batch
+      LOG.error(
+          "Schema conflict in partition {} and no DLQ configured. "
+              + "Configure errors.deadletterqueue.topic.name to route bad records to DLQ.",
+          partition);
+      throw originalError;
+    }
+
+    LOG.info(
+        "Converting {} records individually to identify bad records for partition {}",
+        records.size(),
+        partition);
+
+    List<SinkRecord> goodRecords = new ArrayList<>();
+    int badRecordCount = 0;
+
+    // Try converting each record individually
+    for (SinkRecord record : records) {
+      try {
+        Map<TopicPartition, List<SinkRecord>> singleRecordMap = new HashMap<>();
+        singleRecordMap.put(partition, Collections.singletonList(record));
+
+        Map<TopicPartition, VectorSchemaRoot> result =
+            converter.convertRecordsByPartition(singleRecordMap);
+
+        VectorSchemaRoot root = result.get(partition);
+        if (root != null) {
+          // Record converted successfully - close it for now, we'll re-batch good records
+          root.close();
+          goodRecords.add(record);
+        }
+      } catch (RuntimeException recordError) {
+        // This record caused the error - send to DLQ
+        badRecordCount++;
+        LOG.warn(
+            "Sending bad record to DLQ: topic={}, partition={}, offset={}, error={}",
+            record.topic(),
+            record.kafkaPartition(),
+            record.kafkaOffset(),
+            recordError.getMessage());
+
+        try {
+          errantRecordReporter.report(record, recordError);
+        } catch (Exception dlqError) {
+          LOG.error(
+              "Failed to report record to DLQ: topic={}, partition={}, offset={}",
+              record.topic(),
+              record.kafkaPartition(),
+              record.kafkaOffset(),
+              dlqError);
+          // If DLQ reporting fails, we need to fail the task
+          throw new ConnectException("Failed to report bad record to DLQ", dlqError);
+        }
+      }
+    }
+
+    LOG.info(
+        "Partition {}: {} records sent to DLQ, {} good records remaining",
+        partition,
+        badRecordCount,
+        goodRecords.size());
+
+    // Convert and buffer the good records
+    if (!goodRecords.isEmpty()) {
+      Map<TopicPartition, List<SinkRecord>> goodRecordsMap = new HashMap<>();
+      goodRecordsMap.put(partition, goodRecords);
+
+      try {
+        Map<TopicPartition, VectorSchemaRoot> vectorsByPartition =
+            converter.convertRecordsByPartition(goodRecordsMap);
+
+        VectorSchemaRoot vectorSchemaRoot = vectorsByPartition.get(partition);
+        if (vectorSchemaRoot != null) {
+          buffer.add(vectorSchemaRoot);
+        }
+      } catch (RuntimeException e) {
+        // This shouldn't happen if individual conversions succeeded, but handle it
+        LOG.error("Unexpected error converting good records after DLQ filtering", e);
+        throw e;
+      }
     }
   }
 
@@ -488,38 +711,20 @@ public class DucklakeSinkTask extends SinkTask {
   public void stop() {
     LOG.info("Stopping DucklakeSinkTask, flushing remaining buffers...");
 
-    // Stop the flush scheduler
-    if (flushScheduler != null) {
-      flushScheduler.shutdown();
-      try {
-        if (!flushScheduler.awaitTermination(5, TimeUnit.SECONDS)) {
-          flushScheduler.shutdownNow();
-        }
-      } catch (InterruptedException e) {
-        flushScheduler.shutdownNow();
-        Thread.currentThread().interrupt();
-      }
-    }
-
-    // Flush all remaining buffered data (acquire each partition lock)
+    // Flush all remaining buffered data
     for (TopicPartition partition : buffers.keySet()) {
-      ReentrantLock lock = partitionLocks.get(partition);
-      if (lock != null) {
-        lock.lock();
-      }
       try {
         flushPartition(partition);
       } catch (Exception e) {
         LOG.warn("Failed to flush partition {} during stop: {}", partition, e.getMessage());
-      } finally {
-        if (lock != null) {
-          lock.unlock();
-        }
       }
     }
+
+    // Clean up buffers
+    for (PartitionBuffer buffer : buffers.values()) {
+      buffer.close();
+    }
     buffers.clear();
-    partitionLocks.clear();
-    consecutiveFlushSkips.clear();
 
     try {
       if (writers != null) {
@@ -538,13 +743,6 @@ public class DucklakeSinkTask extends SinkTask {
           converter.close();
         } catch (Exception e) {
           LOG.warn("Failed closing converter: {}", e.getMessage());
-        }
-      }
-      if (metrics != null) {
-        try {
-          metrics.close();
-        } catch (Exception e) {
-          LOG.log(System.Logger.Level.WARNING, "Failed closing metrics: {0}", e.getMessage());
         }
       }
       if (allocator != null) {

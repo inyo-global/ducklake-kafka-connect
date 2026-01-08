@@ -1088,4 +1088,93 @@ class SinkRecordToArrowConverterTest {
     root.close();
     converter.close();
   }
+
+  @Test
+  @DisplayName("ID-like fields are not inferred as timestamps even with timestamp-looking values")
+  void testIdFieldsNotInferredAsTimestamp() {
+    // Given: Schemaless records with ID fields containing timestamp-looking values
+    // This simulates the production bug where distinct_id looked like "2024-01-15T10:30:00Z"
+    Map<String, Object> record = new LinkedHashMap<>();
+    record.put("distinct_id", "2024-01-15T10:30:00Z"); // Looks like a timestamp but is an ID
+    record.put("user_id", "2024-12-10T00:00:00.000Z"); // Another ID with timestamp format
+    record.put("session_id", "2024-01-01T12:00:00Z"); // Another ID
+    record.put("event_uuid", "2024-02-28T23:59:59Z"); // UUID field
+    record.put("api_key", "2024-03-15T08:00:00Z"); // Key field
+    record.put("actual_timestamp", "2024-01-15T10:30:00Z"); // This SHOULD be a timestamp
+    record.put("name", "test-event");
+
+    // When
+    var sinkRecord = new SinkRecord("topic", 0, null, null, null, record, 0);
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var root = converter.convertRecords(List.of(sinkRecord));
+
+    // Then: ID fields should be VARCHAR, not TIMESTAMP
+    assertEquals(1, root.getRowCount());
+
+    // ID-like fields should be inferred as VARCHAR (string)
+    var distinctIdVec = root.getVector("distinct_id");
+    assertTrue(
+        distinctIdVec instanceof VarCharVector,
+        "distinct_id should be VARCHAR, not TIMESTAMP. Got: " + distinctIdVec.getClass());
+    assertEquals(
+        "2024-01-15T10:30:00Z",
+        new String(((VarCharVector) distinctIdVec).get(0), StandardCharsets.UTF_8));
+
+    var userIdVec = root.getVector("user_id");
+    assertTrue(
+        userIdVec instanceof VarCharVector,
+        "user_id should be VARCHAR, not TIMESTAMP. Got: " + userIdVec.getClass());
+
+    var sessionIdVec = root.getVector("session_id");
+    assertTrue(
+        sessionIdVec instanceof VarCharVector,
+        "session_id should be VARCHAR, not TIMESTAMP. Got: " + sessionIdVec.getClass());
+
+    var eventUuidVec = root.getVector("event_uuid");
+    assertTrue(
+        eventUuidVec instanceof VarCharVector,
+        "event_uuid should be VARCHAR, not TIMESTAMP. Got: " + eventUuidVec.getClass());
+
+    var apiKeyVec = root.getVector("api_key");
+    assertTrue(
+        apiKeyVec instanceof VarCharVector,
+        "api_key should be VARCHAR, not TIMESTAMP. Got: " + apiKeyVec.getClass());
+
+    // Non-ID field with timestamp value SHOULD be inferred as timestamp
+    var actualTimestampVec = root.getVector("actual_timestamp");
+    assertTrue(
+        actualTimestampVec instanceof org.apache.arrow.vector.TimeStampMilliVector,
+        "actual_timestamp should be TIMESTAMP. Got: " + actualTimestampVec.getClass());
+
+    root.close();
+    converter.close();
+  }
+
+  @Test
+  @DisplayName("ID field heuristic is case-insensitive")
+  void testIdFieldHeuristicCaseInsensitive() {
+    // Given: ID fields with various casings
+    Map<String, Object> record = new LinkedHashMap<>();
+    record.put("DISTINCT_ID", "2024-01-15T10:30:00Z");
+    record.put("User_ID", "2024-12-10T00:00:00.000Z");
+    record.put("SessionID", "2024-01-01T12:00:00Z");
+    record.put("eventUUID", "2024-02-28T23:59:59Z");
+
+    // When
+    var sinkRecord = new SinkRecord("topic", 0, null, null, null, record, 0);
+    var converter = new SinkRecordToArrowConverter(new RootAllocator());
+    var root = converter.convertRecords(List.of(sinkRecord));
+
+    // Then: All should be VARCHAR regardless of casing
+    assertEquals(1, root.getRowCount());
+
+    assertTrue(
+        root.getVector("DISTINCT_ID") instanceof VarCharVector, "DISTINCT_ID should be VARCHAR");
+    assertTrue(root.getVector("User_ID") instanceof VarCharVector, "User_ID should be VARCHAR");
+    assertTrue(root.getVector("SessionID") instanceof VarCharVector, "SessionID should be VARCHAR");
+    assertTrue(root.getVector("eventUUID") instanceof VarCharVector, "eventUUID should be VARCHAR");
+
+    root.close();
+    converter.close();
+  }
 }

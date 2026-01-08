@@ -274,7 +274,7 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     needs: [build, static-analysis, security-scan]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
 
@@ -304,7 +304,39 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build release artifacts
-        run: ./gradlew build
+        run: ./gradlew build -x test -x integrationTest
+
+      - name: Get short SHA
+        id: sha
+        run: echo "short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          echo "## Changes" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "${{ github.event.head_commit.message }}" >> $GITHUB_OUTPUT
+          echo "" >> $GITHUB_OUTPUT
+          echo "---" >> $GITHUB_OUTPUT
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "**Author:** ${{ github.event.head_commit.author.name }}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Calculate next version
+        id: version
+        run: |
+          # Get the latest v0.0.X tag and increment
+          LATEST_TAG=$(git tag -l 'v0.0.*' | sort -t. -k3 -n | tail -1)
+          if [ -z "$LATEST_TAG" ]; then
+            NEXT_VERSION="v0.0.1"
+          else
+            CURRENT_PATCH=$(echo "$LATEST_TAG" | sed 's/v0\.0\.//')
+            NEXT_PATCH=$((CURRENT_PATCH + 1))
+            NEXT_VERSION="v0.0.$NEXT_PATCH"
+          fi
+          echo "version=$NEXT_VERSION" >> $GITHUB_OUTPUT
+          echo "Next version: $NEXT_VERSION"
 
       - name: Create release
         uses: softprops/action-gh-release@v1
@@ -313,9 +345,26 @@ jobs:
             build/libs/*.jar
             build/distributions/*.tar
             build/distributions/*.zip
-          tag_name: v0.0.${{ github.run_number }}
-          name: Release v0.0.${{ github.run_number }}
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }} (${{ steps.sha.outputs.short }})
+          body: ${{ steps.notes.outputs.notes }}
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update latest tag
+        run: |
+          git tag -f latest
+          git push origin latest --force
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trigger kafka-connect Docker image rebuild
+        run: |
+          curl -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: token ${{ secrets.CLOUD_INFRA_DISPATCH_TOKEN }}" \
+            https://api.github.com/repos/PostHog/posthog-cloud-infra/dispatches \
+            -d '{"event_type":"ducklake-release","client_payload":{"version":"${{ steps.version.outputs.version }}"}}'
+        continue-on-error: true

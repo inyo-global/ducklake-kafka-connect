@@ -223,6 +223,11 @@ public final class DucklakeWriter implements AutoCloseable {
         }
       }
     }
+    // Drop the temp view to avoid memory leaks
+    try (var dropPs = connection.prepareStatement("DROP VIEW IF EXISTS " + tempTable)) {
+      dropPs.executeUpdate();
+      LOG.debug("Dropped temp view {}", tempTable);
+    }
   }
 
   @Override

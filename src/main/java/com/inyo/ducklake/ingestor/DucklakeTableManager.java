@@ -15,7 +15,6 @@
  */
 package com.inyo.ducklake.ingestor;
 
-import com.inyo.ducklake.connect.DucklakeMetrics;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -23,9 +22,11 @@ import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import org.apache.arrow.vector.types.pojo.ArrowType;
@@ -46,18 +47,19 @@ public final class DucklakeTableManager {
   // Per-table locks to allow concurrent operations on different tables
   private static final ConcurrentHashMap<String, Object> TABLE_LOCKS = new ConcurrentHashMap<>();
 
+  // Cache of tables that have been verified to exist (avoids repeated PRAGMA queries)
+  private static final ConcurrentHashMap<String, Boolean> VERIFIED_TABLES =
+      new ConcurrentHashMap<>();
+
+  // Cache of known columns per table (lowercase column names) to avoid repeated PRAGMA queries
+  private static final ConcurrentHashMap<String, Set<String>> KNOWN_COLUMNS =
+      new ConcurrentHashMap<>();
+
   private final DuckDBConnection connection;
   private final DucklakeWriterConfig config;
-  private final DucklakeMetrics metrics;
 
   public DucklakeTableManager(DuckDBConnection connection, DucklakeWriterConfig config) {
-    this(connection, config, null);
-  }
-
-  public DucklakeTableManager(
-      DuckDBConnection connection, DucklakeWriterConfig config, DucklakeMetrics metrics) {
     this.config = config;
-    this.metrics = metrics;
     try {
       // Defensive copy to avoid exposing external mutable connection instance
       this.connection = (DuckDBConnection) connection.duplicate();
@@ -78,17 +80,34 @@ public final class DucklakeTableManager {
    * Ensures that the table exists and reflects (at least) the columns of the provided Arrow schema.
    * Creates it if allowed; evolves (ADD COLUMN) new columns; validates existing column types.
    *
+   * <p>Uses caching to avoid repeated metadata queries for tables that have already been verified.
+   *
    * @param arrowSchema the Arrow schema to ensure
    * @return true if the table existed before this operation, false if it was created
    */
   public boolean ensureTable(Schema arrowSchema) throws SQLException {
     final var table = config.destinationTable();
-    // Get or create a lock specific to this table, allowing concurrent operations on different
-    // tables
-    Object tableLock =
-        TABLE_LOCKS.computeIfAbsent(table.toLowerCase(Locale.ROOT), k -> new Object());
+    final var tableKey = table.toLowerCase(Locale.ROOT);
+
+    // Fast path: if table is already verified, only check for schema evolution
+    Boolean cachedExists = VERIFIED_TABLES.get(tableKey);
+    if (cachedExists != null && cachedExists) {
+      // Table exists and was verified before - only check for new columns
+      evolveTableSchemaIfNeeded(arrowSchema);
+      return true;
+    }
+
+    // Slow path: first time seeing this table, need full verification
+    Object tableLock = TABLE_LOCKS.computeIfAbsent(tableKey, k -> new Object());
 
     synchronized (tableLock) {
+      // Double-check after acquiring lock
+      cachedExists = VERIFIED_TABLES.get(tableKey);
+      if (cachedExists != null && cachedExists) {
+        evolveTableSchemaIfNeeded(arrowSchema);
+        return true;
+      }
+
       final var tableExisted = tableExists(table);
       if (!tableExisted) {
         if (!config.autoCreateTable()) {
@@ -100,8 +119,25 @@ public final class DucklakeTableManager {
       } else {
         evolveTableSchema(arrowSchema);
       }
+
+      // Mark table as verified
+      VERIFIED_TABLES.put(tableKey, true);
       return tableExisted;
     }
+  }
+
+  /**
+   * Evolves table schema if there are new columns or type changes needed. Always calls
+   * evolveTableSchema since type upgrades (INTEGER→BIGINT, FLOAT→DOUBLE) need to be checked even
+   * for existing columns.
+   */
+  private void evolveTableSchemaIfNeeded(Schema arrowSchema) throws SQLException {
+    // Always call evolveTableSchema - it handles:
+    // 1. Adding new columns
+    // 2. Upgrading types (INTEGER→BIGINT, FLOAT→DOUBLE)
+    // 3. Rejecting incompatible type changes
+    // The method itself short-circuits when no changes are needed
+    evolveTableSchema(arrowSchema);
   }
 
   private String qualifiedTableRef() {
@@ -130,21 +166,6 @@ public final class DucklakeTableManager {
           "Identifiers quoted via SqlIdentifierUtil.quote; "
               + "PreparedStatement cannot parameterize DDL identifiers.")
   private void createTable(Schema arrowSchema) throws SQLException {
-    if (metrics != null) {
-      try (var timer = metrics.startSchemaOperationTimer("createTable")) {
-        createTableInternal(arrowSchema);
-      }
-    } else {
-      createTableInternal(arrowSchema);
-    }
-  }
-
-  @SuppressFBWarnings(
-      value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
-      justification =
-          "DDL identifiers are quoted via SqlIdentifierUtil.quote; "
-              + "PreparedStatement cannot parameterize DDL identifiers.")
-  private void createTableInternal(Schema arrowSchema) throws SQLException {
     var cols =
         arrowSchema.getFields().stream()
             .map(f -> SqlIdentifierUtil.quote(f.getName()) + " " + toDuckDBType(f.getType()))
@@ -175,23 +196,29 @@ public final class DucklakeTableManager {
         throw e;
       }
     }
+
+    // Cache the columns we just created
+    final var tableKey = config.destinationTable().toLowerCase(Locale.ROOT);
+    Set<String> columnSet =
+        arrowSchema.getFields().stream()
+            .map(f -> f.getName().toLowerCase(Locale.ROOT))
+            .collect(Collectors.toCollection(HashSet::new));
+    KNOWN_COLUMNS.put(tableKey, ConcurrentHashMap.newKeySet());
+    KNOWN_COLUMNS.get(tableKey).addAll(columnSet);
   }
 
   @SuppressFBWarnings(
       value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
       justification = "DDL evolve validated: identifiers quoted via SqlIdentifierUtil.quote.")
   private void evolveTableSchema(Schema arrowSchema) throws SQLException {
-    if (metrics != null) {
-      try (var timer = metrics.startSchemaOperationTimer("evolveSchema")) {
-        evolveTableSchemaInternal(arrowSchema);
-      }
-    } else {
-      evolveTableSchemaInternal(arrowSchema);
-    }
-  }
-
-  private void evolveTableSchemaInternal(Schema arrowSchema) throws SQLException {
+    final var tableKey = config.destinationTable().toLowerCase(Locale.ROOT);
     final var existing = loadExistingTableMeta();
+
+    // Update the column cache with existing columns from DB
+    Set<String> knownCols =
+        KNOWN_COLUMNS.computeIfAbsent(tableKey, k -> ConcurrentHashMap.newKeySet());
+    knownCols.addAll(existing.keySet());
+
     final var fields = arrowSchema.getFields();
     final var newColumns = new ArrayList<Field>();
     for (final var field : fields) {
@@ -233,6 +260,8 @@ public final class DucklakeTableManager {
       LOG.info("Adding new column: {}", ddl);
       try (final var st = connection.createStatement()) {
         st.execute(ddl);
+        // Add newly created column to the cache
+        knownCols.add(nf.getName().toLowerCase(Locale.ROOT));
       } catch (SQLException e) {
         LOG.error(
             "Failed to add new column {} of type {} to table: {}",
