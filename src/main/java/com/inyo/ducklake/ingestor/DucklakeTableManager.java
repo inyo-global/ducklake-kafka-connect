@@ -26,11 +26,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.arrow.vector.types.pojo.Field;
 import org.apache.arrow.vector.types.pojo.Schema;
 import org.duckdb.DuckDBConnection;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Responsible for all schema/table management operations: - Check existence - Create table - Evolve
@@ -38,8 +41,10 @@ import org.duckdb.DuckDBConnection;
  */
 public final class DucklakeTableManager {
 
-  private static final System.Logger LOG = System.getLogger(DucklakeTableManager.class.getName());
-  private static final Object LOCK = new Object();
+  private static final Logger LOG = LoggerFactory.getLogger(DucklakeTableManager.class);
+
+  // Per-table locks to allow concurrent operations on different tables
+  private static final ConcurrentHashMap<String, Object> TABLE_LOCKS = new ConcurrentHashMap<>();
 
   private final DuckDBConnection connection;
   private final DucklakeWriterConfig config;
@@ -65,10 +70,7 @@ public final class DucklakeTableManager {
     try {
       connection.close();
     } catch (SQLException e) {
-      LOG.log(
-          System.Logger.Level.WARNING,
-          "Failed to close duplicated DuckDB connection: {0}",
-          e.getMessage());
+      LOG.warn("Failed to close duplicated DuckDB connection: {}", e.getMessage());
     }
   }
 
@@ -80,8 +82,13 @@ public final class DucklakeTableManager {
    * @return true if the table existed before this operation, false if it was created
    */
   public boolean ensureTable(Schema arrowSchema) throws SQLException {
-    synchronized (LOCK) {
-      final var table = config.destinationTable();
+    final var table = config.destinationTable();
+    // Get or create a lock specific to this table, allowing concurrent operations on different
+    // tables
+    Object tableLock =
+        TABLE_LOCKS.computeIfAbsent(table.toLowerCase(Locale.ROOT), k -> new Object());
+
+    synchronized (tableLock) {
       final var tableExisted = tableExists(table);
       if (!tableExisted) {
         if (!config.autoCreateTable()) {
@@ -89,7 +96,7 @@ public final class DucklakeTableManager {
               "Table does not exist and auto-create is disabled: " + table);
         }
         createTable(arrowSchema);
-        LOG.log(System.Logger.Level.INFO, "Table created: {0}", table);
+        LOG.info("Table created: {}", table);
       } else {
         evolveTableSchema(arrowSchema);
       }
@@ -112,11 +119,7 @@ public final class DucklakeTableManager {
       }
     } catch (SQLException e) {
       // If table does not exist, DuckDB may raise a Catalog Error; treat as non-existent
-      LOG.log(
-          System.Logger.Level.DEBUG,
-          "tableExists({0}) via PRAGMA failed: {1}",
-          table,
-          e.getMessage());
+      LOG.debug("tableExists({}) via PRAGMA failed: {}", table, e.getMessage());
       return false;
     }
   }
@@ -164,11 +167,11 @@ public final class DucklakeTableManager {
       final var partitionExprs = String.join(", ", config.partitionByExpressions());
       final var alterDdl =
           "ALTER TABLE " + qualifiedTableRef() + " SET PARTITIONED BY (" + partitionExprs + ")";
-      LOG.log(System.Logger.Level.INFO, "Setting table partitioning: {0}", alterDdl);
+      LOG.info("Setting table partitioning: {}", alterDdl);
       try (Statement st = connection.createStatement()) {
         st.execute(alterDdl);
       } catch (SQLException e) {
-        LOG.log(System.Logger.Level.ERROR, "Failed to set table partitioning", e);
+        LOG.error("Failed to set table partitioning", e);
         throw e;
       }
     }
@@ -227,20 +230,15 @@ public final class DucklakeTableManager {
               + SqlIdentifierUtil.quote(nf.getName())
               + " "
               + newType;
-      LOG.log(System.Logger.Level.INFO, "Adding new column: {0}", ddl);
+      LOG.info("Adding new column: {}", ddl);
       try (final var st = connection.createStatement()) {
         st.execute(ddl);
       } catch (SQLException e) {
-        LOG.log(
-            System.Logger.Level.ERROR,
-            "Failed to add new column "
-                + nf.getName()
-                + " of type "
-                + newType
-                + ": "
-                + " to table: "
-                + qualifiedTableRef()
-                + e.getMessage(),
+        LOG.error(
+            "Failed to add new column {} of type {} to table: {}",
+            nf.getName(),
+            newType,
+            qualifiedTableRef(),
             e);
         throw e;
       }
@@ -283,7 +281,7 @@ public final class DucklakeTableManager {
             + SqlIdentifierUtil.quote(columnName)
             + " SET DATA TYPE "
             + newType;
-    LOG.log(System.Logger.Level.INFO, "Upgrading column type: {0}", ddl);
+    LOG.info("Upgrading column type: {}", ddl);
     try (Statement st = connection.createStatement()) {
       st.execute(ddl);
     }
