@@ -165,7 +165,7 @@ spotless {
 }
 
 dependencies {
-    implementation("org.duckdb:duckdb_jdbc:1.4.2.0")
+    implementation("org.duckdb:duckdb_jdbc:1.4.3.0")
     implementation("org.apache.arrow:arrow-vector:18.3.0") {
         exclude(group = "org.slf4j")
     }

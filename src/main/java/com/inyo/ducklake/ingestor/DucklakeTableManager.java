@@ -15,6 +15,7 @@
  */
 package com.inyo.ducklake.ingestor;
 
+import com.inyo.ducklake.connect.DucklakeMetrics;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -47,9 +48,16 @@ public final class DucklakeTableManager {
 
   private final DuckDBConnection connection;
   private final DucklakeWriterConfig config;
+  private final DucklakeMetrics metrics;
 
   public DucklakeTableManager(DuckDBConnection connection, DucklakeWriterConfig config) {
+    this(connection, config, null);
+  }
+
+  public DucklakeTableManager(
+      DuckDBConnection connection, DucklakeWriterConfig config, DucklakeMetrics metrics) {
     this.config = config;
+    this.metrics = metrics;
     try {
       // Defensive copy to avoid exposing external mutable connection instance
       this.connection = (DuckDBConnection) connection.duplicate();
@@ -122,6 +130,21 @@ public final class DucklakeTableManager {
           "Identifiers quoted via SqlIdentifierUtil.quote; "
               + "PreparedStatement cannot parameterize DDL identifiers.")
   private void createTable(Schema arrowSchema) throws SQLException {
+    if (metrics != null) {
+      try (var timer = metrics.startSchemaOperationTimer("createTable")) {
+        createTableInternal(arrowSchema);
+      }
+    } else {
+      createTableInternal(arrowSchema);
+    }
+  }
+
+  @SuppressFBWarnings(
+      value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
+      justification =
+          "DDL identifiers are quoted via SqlIdentifierUtil.quote; "
+              + "PreparedStatement cannot parameterize DDL identifiers.")
+  private void createTableInternal(Schema arrowSchema) throws SQLException {
     var cols =
         arrowSchema.getFields().stream()
             .map(f -> SqlIdentifierUtil.quote(f.getName()) + " " + toDuckDBType(f.getType()))
@@ -158,6 +181,16 @@ public final class DucklakeTableManager {
       value = "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
       justification = "DDL evolve validated: identifiers quoted via SqlIdentifierUtil.quote.")
   private void evolveTableSchema(Schema arrowSchema) throws SQLException {
+    if (metrics != null) {
+      try (var timer = metrics.startSchemaOperationTimer("evolveSchema")) {
+        evolveTableSchemaInternal(arrowSchema);
+      }
+    } else {
+      evolveTableSchemaInternal(arrowSchema);
+    }
+  }
+
+  private void evolveTableSchemaInternal(Schema arrowSchema) throws SQLException {
     final var existing = loadExistingTableMeta();
     final var fields = arrowSchema.getFields();
     final var newColumns = new ArrayList<Field>();

@@ -33,10 +33,12 @@ import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.metrics.Metrics;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.kafka.connect.sink.SinkTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.apache.kafka.connect.sink.SinkTaskContext;
 
 public class DucklakeSinkTask extends SinkTask {
   private static final Logger LOG = LoggerFactory.getLogger(DucklakeSinkTask.class);
@@ -46,6 +48,8 @@ public class DucklakeSinkTask extends SinkTask {
   private Map<TopicPartition, DucklakeWriter> writers;
   private BufferAllocator allocator;
   private SinkRecordToArrowConverter converter;
+  private DucklakeMetrics metrics;
+  private SinkTaskContext context;
 
   // Buffering state
   private Map<TopicPartition, PartitionBuffer> buffers;
@@ -114,6 +118,12 @@ public class DucklakeSinkTask extends SinkTask {
   @Override
   public String version() {
     return DucklakeSinkConfig.VERSION;
+  }
+
+  @Override
+  public void initialize(SinkTaskContext context) {
+    super.initialize(context);
+    this.context = context;
   }
 
   @Override
@@ -203,6 +213,29 @@ public class DucklakeSinkTask extends SinkTask {
         lock.unlock();
       }
     }
+    // Initialize metrics - use Kafka's metrics from context or create new instance
+    var metricsRegistry = getMetricsRegistry();
+    var connectorName = map.getOrDefault("name", "ducklake-sink");
+    var taskId = map.getOrDefault("task.id", "0");
+    this.metrics = new DucklakeMetrics(metricsRegistry, connectorName, taskId);
+
+    LOG.log(
+        System.Logger.Level.INFO,
+        "Started DucklakeSinkTask with metrics enabled for connector={0}, task={1}",
+        connectorName,
+        taskId);
+  }
+
+  /**
+   * Gets the metrics registry from the context, or creates a new one if not available.
+   *
+   * @return the Metrics instance
+   */
+  private Metrics getMetricsRegistry() {
+    // In Kafka Connect, the metrics registry is typically available through the context
+    // However, the API doesn't expose it directly, so we create our own instance
+    // that will still be registered with JMX automatically
+    return new Metrics();
   }
 
   @Override
@@ -213,7 +246,8 @@ public class DucklakeSinkTask extends SinkTask {
     super.open(partitions);
     try {
       this.connectionFactory.create();
-      this.writerFactory = new DucklakeWriterFactory(config, connectionFactory.getConnection());
+      this.writerFactory =
+          new DucklakeWriterFactory(config, connectionFactory.getConnection(), metrics);
 
       // Create one writer and buffer for each partition
       for (TopicPartition partition : partitions) {
@@ -239,6 +273,13 @@ public class DucklakeSinkTask extends SinkTask {
     // Group records by partition first (no lock needed)
     Map<TopicPartition, List<SinkRecord>> recordsByPartition =
         SinkRecordToArrowConverter.groupRecordsByPartition(records);
+    try {
+      // Record batch size metric
+      metrics.recordBatchProcessed(records.size());
+
+      // Detect if we have Arrow IPC data (VectorSchemaRoot) or traditional data
+      boolean hasArrowIpcData =
+          records.stream().anyMatch(record -> record.value() instanceof VectorSchemaRoot);
 
     // Process each partition with its own lock
     for (Map.Entry<TopicPartition, List<SinkRecord>> entry : recordsByPartition.entrySet()) {
@@ -497,6 +538,13 @@ public class DucklakeSinkTask extends SinkTask {
           converter.close();
         } catch (Exception e) {
           LOG.warn("Failed closing converter: {}", e.getMessage());
+        }
+      }
+      if (metrics != null) {
+        try {
+          metrics.close();
+        } catch (Exception e) {
+          LOG.log(System.Logger.Level.WARNING, "Failed closing metrics: {0}", e.getMessage());
         }
       }
       if (allocator != null) {

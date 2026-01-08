@@ -24,9 +24,16 @@ public final class DucklakeWriterFactory {
 
   private final DucklakeSinkConfig config;
   private final DuckDBConnection conn;
+  private final DucklakeMetrics metrics;
 
   public DucklakeWriterFactory(DucklakeSinkConfig config, DuckDBConnection conn) {
+    this(config, conn, null);
+  }
+
+  public DucklakeWriterFactory(
+      DucklakeSinkConfig config, DuckDBConnection conn, DucklakeMetrics metrics) {
     this.config = config;
+    this.metrics = metrics;
     try {
       this.conn = (DuckDBConnection) conn.duplicate();
     } catch (SQLException e) {
@@ -59,6 +66,6 @@ public final class DucklakeWriterFactory {
     DucklakeWriterConfig writerConfig =
         new DucklakeWriterConfig(table, autoCreate, idCols, partitionExprs);
 
-    return new DucklakeWriter(conn, writerConfig);
+    return new DucklakeWriter(conn, writerConfig, metrics);
   }
 }

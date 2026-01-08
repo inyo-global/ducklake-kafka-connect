@@ -1,0 +1,380 @@
+{
+  "dashboard": {
+    "title": "Ducklake Kafka Connect Metrics",
+    "tags": ["kafka-connect", "ducklake", "duckdb"],
+    "timezone": "browser",
+    "schemaVersion": 16,
+    "version": 1,
+    "refresh": "10s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "JDBC Query Performance",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "kafka_metrics_jdbc_query_time_avg{connector=\"ducklake-sink\"}",
+            "legendFormat": "Avg Query Time (ms)",
+            "refId": "A"
+          },
+          {
+            "expr": "kafka_metrics_jdbc_query_time_max{connector=\"ducklake-sink\"}",
+            "legendFormat": "Max Query Time (ms)",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "ms", "label": "Time"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 2,
+        "title": "Query Rate",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "kafka_metrics_jdbc_query_rate{connector=\"ducklake-sink\"}",
+            "legendFormat": "Queries/sec",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Queries/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 3,
+        "title": "Records Processing Rate",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+        "targets": [
+          {
+            "expr": "rate(kafka_metrics_records_processed_total{connector=\"ducklake-sink\"}[5m])",
+            "legendFormat": "Records/sec",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          {"format": "rps", "label": "Records/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 4,
+        "title": "Total Records Processed",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 8},
+        "targets": [
+          {
+            "expr": "kafka_metrics_records_processed_total{connector=\"ducklake-sink\"}",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "colorMode": "value",
+          "graphMode": "area",
+          "orientation": "auto",
+          "reduceOptions": {
+            "calcs": ["lastNotNull"],
+            "fields": "",
+            "values": false
+          }
+        }
+      },
+      {
+        "id": 5,
+        "title": "Batch Size",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+        "targets": [
+          {
+            "expr": "kafka_metrics_batch_size_avg{connector=\"ducklake-sink\"}",
+            "legendFormat": "Avg Batch Size",
+            "refId": "A"
+          },
+          {
+            "expr": "kafka_metrics_batch_size_max{connector=\"ducklake-sink\"}",
+            "legendFormat": "Max Batch Size",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Records"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Schema Operations",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+        "targets": [
+          {
+            "expr": "kafka_metrics_schema_operation_count{connector=\"ducklake-sink\"}",
+            "legendFormat": "Total Operations",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(kafka_metrics_schema_operation_count{connector=\"ducklake-sink\"}[5m]) * 60",
+            "legendFormat": "Operations/min",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Count"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Schema Operation Time",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24},
+        "targets": [
+          {
+            "expr": "kafka_metrics_schema_operation_time_avg{connector=\"ducklake-sink\"}",
+            "legendFormat": "Avg Schema Op Time (ms)",
+            "refId": "A"
+          },
+          {
+            "expr": "kafka_metrics_schema_operation_time_max{connector=\"ducklake-sink\"}",
+            "legendFormat": "Max Schema Op Time (ms)",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "ms", "label": "Time"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Key Metrics Summary",
+        "type": "stat",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24},
+        "targets": [
+          {
+            "expr": "kafka_metrics_jdbc_query_time_avg{connector=\"ducklake-sink\"}",
+            "legendFormat": "Avg Query Time (ms)",
+            "refId": "A"
+          },
+          {
+            "expr": "rate(kafka_metrics_records_processed_total{connector=\"ducklake-sink\"}[5m])",
+            "legendFormat": "Records/sec",
+            "refId": "B"
+          },
+          {
+            "expr": "kafka_metrics_batch_size_avg{connector=\"ducklake-sink\"}",
+            "legendFormat": "Avg Batch Size",
+            "refId": "C"
+          }
+        ],
+        "options": {
+          "colorMode": "value",
+          "graphMode": "none",
+          "orientation": "horizontal",
+          "reduceOptions": {
+            "calcs": ["lastNotNull"],
+            "fields": "",
+            "values": false
+          }
+        }
+      },
+      {
+        "id": 9,
+        "title": "Query Latency Heatmap",
+        "type": "heatmap",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 32},
+        "targets": [
+          {
+            "expr": "kafka_metrics_jdbc_query_time_avg{connector=\"ducklake-sink\"}",
+            "format": "time_series",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "calculate": true,
+          "cellGap": 2,
+          "cellRadius": 0,
+          "cellValues": {},
+          "color": {
+            "scheme": "interpolateSpectral",
+            "steps": 256
+          },
+          "exemplars": {
+            "color": "rgba(255,0,255,0.7)"
+          }
+        }
+      },
+      {
+        "id": 10,
+        "title": "Performance by Operation Type",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 40},
+        "targets": [
+          {
+            "expr": "kafka_metrics_operation_time_avg{connector=\"ducklake-sink\",operation=\"upsertWithMergeInto\"}",
+            "legendFormat": "MERGE (upsert)",
+            "refId": "A"
+          },
+          {
+            "expr": "kafka_metrics_operation_time_avg{connector=\"ducklake-sink\",operation=\"simpleInsert\"}",
+            "legendFormat": "INSERT (simple)",
+            "refId": "B"
+          },
+          {
+            "expr": "kafka_metrics_operation_time_avg{connector=\"ducklake-sink\",operation=\"createTable\"}",
+            "legendFormat": "CREATE TABLE",
+            "refId": "C"
+          },
+          {
+            "expr": "kafka_metrics_operation_time_avg{connector=\"ducklake-sink\",operation=\"evolveSchema\"}",
+            "legendFormat": "ALTER TABLE (evolve)",
+            "refId": "D"
+          }
+        ],
+        "yaxes": [
+          {"format": "ms", "label": "Time"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 11,
+        "title": "Operation Rate by Type",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 40},
+        "targets": [
+          {
+            "expr": "kafka_metrics_operation_rate{connector=\"ducklake-sink\",operation=\"upsertWithMergeInto\"}",
+            "legendFormat": "MERGE/sec",
+            "refId": "A"
+          },
+          {
+            "expr": "kafka_metrics_operation_rate{connector=\"ducklake-sink\",operation=\"simpleInsert\"}",
+            "legendFormat": "INSERT/sec",
+            "refId": "B"
+          }
+        ],
+        "yaxes": [
+          {"format": "ops", "label": "Operations/sec"},
+          {"format": "short"}
+        ]
+      },
+      {
+        "id": 12,
+        "title": "MERGE vs INSERT Comparison",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 12, "x": 0, "y": 48},
+        "targets": [
+          {
+            "expr": "kafka_metrics_operation_time_avg{connector=\"ducklake-sink\",operation=\"upsertWithMergeInto\"}",
+            "legendFormat": "MERGE Avg Time (ms)",
+            "refId": "A"
+          },
+          {
+            "expr": "kafka_metrics_operation_time_avg{connector=\"ducklake-sink\",operation=\"simpleInsert\"}",
+            "legendFormat": "INSERT Avg Time (ms)",
+            "refId": "B"
+          },
+          {
+            "expr": "(kafka_metrics_operation_time_avg{operation=\"upsertWithMergeInto\"} - kafka_metrics_operation_time_avg{operation=\"simpleInsert\"}) / kafka_metrics_operation_time_avg{operation=\"simpleInsert\"} * 100",
+            "legendFormat": "MERGE overhead (%)",
+            "refId": "C"
+          }
+        ],
+        "options": {
+          "colorMode": "value",
+          "graphMode": "none",
+          "orientation": "horizontal",
+          "reduceOptions": {
+            "calcs": ["lastNotNull"],
+            "fields": "",
+            "values": false
+          }
+        }
+      },
+      {
+        "id": 13,
+        "title": "Operation Count (24h)",
+        "type": "graph",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 48},
+        "targets": [
+          {
+            "expr": "increase(kafka_metrics_operation_count{connector=\"ducklake-sink\",operation=\"upsertWithMergeInto\"}[24h])",
+            "legendFormat": "MERGE (24h)",
+            "refId": "A"
+          },
+          {
+            "expr": "increase(kafka_metrics_operation_count{connector=\"ducklake-sink\",operation=\"simpleInsert\"}[24h])",
+            "legendFormat": "INSERT (24h)",
+            "refId": "B"
+          },
+          {
+            "expr": "increase(kafka_metrics_operation_count{connector=\"ducklake-sink\",operation=\"createTable\"}[24h])",
+            "legendFormat": "CREATE TABLE (24h)",
+            "refId": "C"
+          },
+          {
+            "expr": "increase(kafka_metrics_operation_count{connector=\"ducklake-sink\",operation=\"evolveSchema\"}[24h])",
+            "legendFormat": "EVOLVE SCHEMA (24h)",
+            "refId": "D"
+          }
+        ],
+        "yaxes": [
+          {"format": "short", "label": "Count"},
+          {"format": "short"}
+        ]
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "connector",
+          "type": "query",
+          "query": "label_values(kafka_metrics_jdbc_query_time_avg, connector)",
+          "current": {
+            "text": "ducklake-sink",
+            "value": "ducklake-sink"
+          },
+          "hide": 0,
+          "includeAll": false,
+          "multi": false,
+          "refresh": 1
+        },
+        {
+          "name": "task",
+          "type": "query",
+          "query": "label_values(kafka_metrics_jdbc_query_time_avg{connector=\"$connector\"}, task)",
+          "current": {
+            "text": "All",
+            "value": "$__all"
+          },
+          "hide": 0,
+          "includeAll": true,
+          "multi": true,
+          "refresh": 1
+        }
+      ]
+    },
+    "annotations": {
+      "list": [
+        {
+          "datasource": "Prometheus",
+          "enable": true,
+          "expr": "ALERTS{alertname=\"DucklakeSlowQuery\"}",
+          "iconColor": "red",
+          "name": "Slow Query Alerts",
+          "step": "60s",
+          "tagKeys": "alertname,connector",
+          "textFormat": "Slow query detected",
+          "titleFormat": "Alert: {{ alertname }}"
+        }
+      ]
+    }
+  }
+}
+
