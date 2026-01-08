@@ -15,6 +15,7 @@
  */
 package com.inyo.ducklake.connect;
 
+import edu.umd.cs.findbugs.annotations.NonNull;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.sql.DriverManager;
 import java.sql.SQLException;
@@ -37,6 +38,21 @@ public class DucklakeConnectionFactory {
     if (this.conn != null) {
       return;
     }
+    final Properties properties = getProperties();
+    this.conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
+    final String statement = buildAttachStatement();
+    this.conn.createStatement().execute("INSTALL httpfs;");
+    this.conn.createStatement().execute("LOAD httpfs;");
+    try (var st = conn.createStatement()) {
+      st.execute(statement);
+      // Configure DuckLake retry count for handling PostgreSQL serialization conflicts
+      int maxRetryCount = config.getDucklakeMaxRetryCount();
+      st.execute("SET ducklake_max_retry_count = " + maxRetryCount);
+    }
+  }
+
+  @NonNull
+  private Properties getProperties() {
     final Properties properties = new Properties();
     properties.setProperty("s3_url_style", config.getS3UrlStyle());
     properties.setProperty("s3_use_ssl", config.getS3UseSsl());
@@ -45,14 +61,7 @@ public class DucklakeConnectionFactory {
     properties.setProperty("s3_secret_access_key", config.getS3SecretAccessKey());
     int threadCount = config.getDuckDbThreads();
     properties.setProperty("threads", String.valueOf(threadCount));
-    this.conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
-    final String statement = buildAttachStatement();
-    try (var st = conn.createStatement()) {
-      st.execute(statement);
-      // Configure DuckLake retry count for handling PostgreSQL serialization conflicts
-      int maxRetryCount = config.getDucklakeMaxRetryCount();
-      st.execute("SET ducklake_max_retry_count = " + maxRetryCount);
-    }
+    return properties;
   }
 
   /* package */ String buildAttachStatement() {
@@ -77,7 +86,7 @@ public class DucklakeConnectionFactory {
       throw new IllegalStateException("Connection not initialized. Call create() first.");
     }
     try {
-      return (DuckDBConnection) conn.duplicate();
+      return conn.duplicate();
     } catch (SQLException e) {
       throw new RuntimeException("Failed to duplicate DuckDB connection", e);
     }
