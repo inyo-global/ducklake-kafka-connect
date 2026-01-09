@@ -84,11 +84,14 @@ public class DucklakeConnectionFactory {
         st.execute("INSTALL httpfs;");
         st.execute("LOAD httpfs;");
       } catch (SQLException installEx) {
-        var msg = "Failed to load or install the DuckDB 'httpfs' extension." +
-            " Ensure the environment allows DuckDB to download and write extensions" +
-            " or install the extension manually (e.g. run 'INSTALL httpfs' in a DuckDB shell). " +
-            "Load error: " + loadEx.getMessage() +
-            "; install error: " + installEx.getMessage();
+        var msg =
+            "Failed to load or install the DuckDB 'httpfs' extension."
+                + " Ensure the environment allows DuckDB to download and write extensions"
+                + " or install the extension manually (e.g. run 'INSTALL httpfs' in a DuckDB shell). "
+                + "Load error: "
+                + loadEx.getMessage()
+                + "; install error: "
+                + installEx.getMessage();
         throw new SQLException(msg, installEx);
       }
     }
