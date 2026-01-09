@@ -19,6 +19,7 @@ import edu.umd.cs.findbugs.annotations.NonNull;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.sql.DriverManager;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.util.Properties;
 import org.duckdb.DuckDBConnection;
 
@@ -41,8 +42,8 @@ public class DucklakeConnectionFactory {
     this.conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", getProperties());
     var statement = buildAttachStatement();
     try (var st = conn.createStatement()) {
-      st.execute("INSTALL httpfs;");
-      st.execute("LOAD httpfs;");
+      // Load/install the httpfs extension (moved to helper for clarity).
+      preloadHttpfsExtension(st);
 
       // After httpfs is loaded, configure S3/httpfs-related settings via SET statements.
       final var s3UrlStyle = config.getS3UrlStyle();
@@ -70,6 +71,26 @@ public class DucklakeConnectionFactory {
       // Configure DuckLake retry count for handling PostgreSQL serialization conflicts
       final var maxRetryCount = config.getDucklakeMaxRetryCount();
       st.execute("SET ducklake_max_retry_count = " + maxRetryCount);
+    }
+  }
+
+  private void preloadHttpfsExtension(Statement st) throws SQLException {
+    // Prefer loading the extension if it's already installed. If LOAD fails because the
+    // extension is missing, attempt INSTALL then LOAD. Surface a helpful error if both fail.
+    try {
+      st.execute("LOAD httpfs;");
+    } catch (SQLException loadEx) {
+      try {
+        st.execute("INSTALL httpfs;");
+        st.execute("LOAD httpfs;");
+      } catch (SQLException installEx) {
+        var msg = "Failed to load or install the DuckDB 'httpfs' extension." +
+            " Ensure the environment allows DuckDB to download and write extensions" +
+            " or install the extension manually (e.g. run 'INSTALL httpfs' in a DuckDB shell). " +
+            "Load error: " + loadEx.getMessage() +
+            "; install error: " + installEx.getMessage();
+        throw new SQLException(msg, installEx);
+      }
     }
   }
 
