@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
   workflow_dispatch:
 
 permissions:
@@ -13,8 +13,8 @@ permissions:
   security-events: write
 
 env:
-  JAVA_VERSION: '17'
-  JAVA_DISTRIBUTION: 'temurin'
+  JAVA_VERSION: "21"
+  JAVA_DISTRIBUTION: "temurin"
 
 jobs:
   test:
@@ -183,7 +183,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [test, static-analysis]  # integration-test removed - runs in parallel but doesn't block
+    needs: [test, static-analysis] # integration-test removed - runs in parallel but doesn't block
 
     steps:
       - name: Checkout code
