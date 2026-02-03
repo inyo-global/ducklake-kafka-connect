@@ -31,6 +31,11 @@ public final class DucklakeWriter implements AutoCloseable {
 
   private static final Logger LOG = LoggerFactory.getLogger(DucklakeWriter.class);
 
+  /** Returns true if the column is a system column that should be excluded from INSERT/MERGE. */
+  private static boolean isSystemColumn(String name) {
+    return name.equalsIgnoreCase(DucklakeTableManager.INSERTED_AT_COLUMN);
+  }
+
   private final DuckDBConnection connection;
   private final DucklakeWriterConfig config;
   private final DucklakeTableManager tableManager;
@@ -112,9 +117,11 @@ public final class DucklakeWriter implements AutoCloseable {
           java.util.Arrays.stream(pkCols)
               .map(c -> c.toLowerCase(java.util.Locale.ROOT))
               .collect(java.util.stream.Collectors.toSet());
+      // Filter out system columns (like _inserted_at) from non-key fields for UPDATE
       var nonKey =
           fields.stream()
               .filter(f -> !pkSet.contains(f.getName().toLowerCase(java.util.Locale.ROOT)))
+              .filter(f -> !isSystemColumn(f.getName()))
               .toList();
       var updateSetClause =
           nonKey.isEmpty()
@@ -128,14 +135,19 @@ public final class DucklakeWriter implements AutoCloseable {
                               + "."
                               + SqlIdentifierUtil.quote(f.getName()))
                   .collect(Collectors.joining(", "));
-      var insertCols =
-          fields.stream()
-              .map(f -> tempTable + "." + SqlIdentifierUtil.quote(f.getName()))
-              .collect(Collectors.joining(", "));
-      var targetCols =
-          fields.stream()
-              .map(f -> SqlIdentifierUtil.quote(f.getName()))
-              .collect(Collectors.joining(", "));
+      // Filter out system columns from INSERT columns (we'll add them explicitly with NOW())
+      var dataFields = fields.stream().filter(f -> !isSystemColumn(f.getName())).toList();
+      var insertColsList = new java.util.ArrayList<String>();
+      var targetColsList = new java.util.ArrayList<String>();
+      for (var f : dataFields) {
+        insertColsList.add(tempTable + "." + SqlIdentifierUtil.quote(f.getName()));
+        targetColsList.add(SqlIdentifierUtil.quote(f.getName()));
+      }
+      // Add _inserted_at with NOW() value
+      insertColsList.add("NOW()");
+      targetColsList.add(SqlIdentifierUtil.quote(DucklakeTableManager.INSERTED_AT_COLUMN));
+      var insertCols = String.join(", ", insertColsList);
+      var targetCols = String.join(", ", targetColsList);
       var sql = new StringBuilder();
       sql.append("MERGE INTO ")
           .append(tableQuoted)
@@ -189,14 +201,19 @@ public final class DucklakeWriter implements AutoCloseable {
       connection.registerArrowStream(tempTable, arrayStream);
 
       // Build simple INSERT INTO ... SELECT FROM tempTable
-      var columnNames =
-          fields.stream()
-              .map(f -> SqlIdentifierUtil.quote(f.getName()))
-              .collect(java.util.stream.Collectors.joining(", "));
-      var selectColumns =
-          fields.stream()
-              .map(f -> tempTable + "." + SqlIdentifierUtil.quote(f.getName()))
-              .collect(java.util.stream.Collectors.joining(", "));
+      // Filter out system columns (we'll add _inserted_at explicitly with NOW())
+      var dataFields = fields.stream().filter(f -> !isSystemColumn(f.getName())).toList();
+      var columnNamesList = new java.util.ArrayList<String>();
+      var selectColumnsList = new java.util.ArrayList<String>();
+      for (var f : dataFields) {
+        columnNamesList.add(SqlIdentifierUtil.quote(f.getName()));
+        selectColumnsList.add(tempTable + "." + SqlIdentifierUtil.quote(f.getName()));
+      }
+      // Add _inserted_at with NOW() value
+      columnNamesList.add(SqlIdentifierUtil.quote(DucklakeTableManager.INSERTED_AT_COLUMN));
+      selectColumnsList.add("NOW()");
+      var columnNames = String.join(", ", columnNamesList);
+      var selectColumns = String.join(", ", selectColumnsList);
 
       var sql = new StringBuilder();
       sql.append("INSERT INTO ")

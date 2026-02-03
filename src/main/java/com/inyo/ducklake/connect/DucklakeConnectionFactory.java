@@ -39,71 +39,44 @@ public class DucklakeConnectionFactory {
     if (this.conn != null) {
       return;
     }
-    this.conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", getProperties());
-    var statement = buildAttachStatement();
+    // Create connection with only non-extension-dependent properties.
+    // S3 settings require the httpfs extension, so they must be set via SQL
+    // after the connection is established and the extension is loaded.
+    final Properties properties = new Properties();
+    int threadCount = config.getDuckDbThreads();
+    properties.setProperty("threads", String.valueOf(threadCount));
+    this.conn = (DuckDBConnection) DriverManager.getConnection("jdbc:duckdb:", properties);
+
     try (var st = conn.createStatement()) {
-      // Load/install the httpfs extension (moved to helper for clarity).
-      preloadHttpfsExtension(st);
-
-      // After httpfs is loaded, configure S3/httpfs-related settings via SET statements.
-      final var s3UrlStyle = config.getS3UrlStyle();
-      if (s3UrlStyle != null && !s3UrlStyle.isBlank()) {
-        st.execute("SET s3_url_style = '" + s3UrlStyle.replace("'", "''") + "'");
-      }
-      final var s3UseSsl = config.getS3UseSsl();
-      if (s3UseSsl != null && !s3UseSsl.isBlank()) {
-        st.execute("SET s3_use_ssl = '" + s3UseSsl.replace("'", "''") + "'");
-      }
-      final var s3Endpoint = config.getS3Endpoint();
-      if (s3Endpoint != null && !s3Endpoint.isBlank()) {
-        st.execute("SET s3_endpoint = '" + s3Endpoint.replace("'", "''") + "'");
-      }
-      final var s3AccessKey = config.getS3AccessKeyId();
-      if (s3AccessKey != null && !s3AccessKey.isBlank()) {
-        st.execute("SET s3_access_key_id = '" + s3AccessKey.replace("'", "''") + "'");
-      }
-      final var s3Secret = config.getS3SecretAccessKey();
-      if (s3Secret != null && !s3Secret.isBlank()) {
-        st.execute("SET s3_secret_access_key = '" + s3Secret.replace("'", "''") + "'");
+      // Only install/load httpfs and configure S3 when using S3 storage.
+      // This avoids the "httpfs extension needs to be loaded" error that occurs
+      // when S3 settings are passed as connection properties before the extension
+      // can be autoloaded, while still allowing local file storage to work without
+      // the httpfs extension.
+      if (requiresS3Configuration()) {
+        st.execute("INSTALL httpfs");
+        st.execute("LOAD httpfs");
+        st.execute("SET s3_url_style = '" + config.getS3UrlStyle() + "'");
+        st.execute("SET s3_use_ssl = " + config.getS3UseSsl());
+        st.execute("SET s3_endpoint = '" + config.getS3Endpoint() + "'");
+        st.execute("SET s3_access_key_id = '" + config.getS3AccessKeyId() + "'");
+        st.execute("SET s3_secret_access_key = '" + config.getS3SecretAccessKey() + "'");
       }
 
+      // Attach the DuckLake catalog
+      final String statement = buildAttachStatement();
       st.execute(statement);
+
       // Configure DuckLake retry count for handling PostgreSQL serialization conflicts
       final var maxRetryCount = config.getDucklakeMaxRetryCount();
       st.execute("SET ducklake_max_retry_count = " + maxRetryCount);
     }
   }
 
-  private void preloadHttpfsExtension(Statement st) throws SQLException {
-    // Prefer loading the extension if it's already installed. If LOAD fails because the
-    // extension is missing, attempt INSTALL then LOAD. Surface a helpful error if both fail.
-    try {
-      st.execute("LOAD httpfs;");
-    } catch (SQLException loadEx) {
-      try {
-        st.execute("INSTALL httpfs;");
-        st.execute("LOAD httpfs;");
-      } catch (SQLException installEx) {
-        var msg =
-            "Failed to load or install the DuckDB 'httpfs' extension."
-                + " Ensure the environment allows DuckDB to download and write extensions"
-                + " or install the extension manually (e.g. run 'INSTALL httpfs' in a DuckDB shell). "
-                + "Load error: "
-                + loadEx.getMessage()
-                + "; install error: "
-                + installEx.getMessage();
-        throw new SQLException(msg, installEx);
-      }
-    }
-  }
-
-  @NonNull
-  private Properties getProperties() {
-    var properties = new Properties();
-    // Only pass properties that do not require httpfs at startup (threads only).
-    var threadCount = config.getDuckDbThreads();
-    properties.setProperty("threads", String.valueOf(threadCount));
-    return properties;
+  /** Returns true if the data path uses S3 storage and requires httpfs configuration. */
+  private boolean requiresS3Configuration() {
+    String dataPath = config.getDataPath();
+    return dataPath != null && (dataPath.startsWith("s3://") || dataPath.startsWith("s3a://"));
   }
 
   /* package */ String buildAttachStatement() {

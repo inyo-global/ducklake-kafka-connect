@@ -1,0 +1,77 @@
+name: Semgrep
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  SEMGREP_ENABLE_VERSION_CHECK: 'false'
+
+jobs:
+  semgrep-java:
+    runs-on: ubuntu-latest
+    container:
+      image: returntocorp/semgrep
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep
+        run: |
+          semgrep \
+            --config "p/java" \
+            --config "p/owasp-top-ten" \
+            --config "p/security-audit" \
+            --config "p/trailofbits" \
+            --error \
+            --metrics=off \
+            --verbose \
+            src/
+
+  # scans GitHub Actions and other repo-wide config
+  semgrep-general:
+    runs-on: ubuntu-latest
+    container:
+      image: returntocorp/semgrep
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # exclude directories already scanned by semgrep-java
+      - name: Run Semgrep
+        run: |
+          semgrep \
+            --config "p/owasp-top-ten" \
+            --config "p/security-audit" \
+            --config "p/trailofbits" \
+            --config "p/github-actions" \
+            --error \
+            --metrics=off \
+            --verbose \
+            --exclude ./src/ \
+            .
+
+  semgrep_checks:
+    needs: [semgrep-java, semgrep-general]
+    name: Semgrep Checks Pass
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check matrix outcome
+        run: |
+          if [[ "${{ needs.semgrep-java.result }}" != "success" && "${{ needs.semgrep-java.result }}" != "skipped" ]]; then
+            echo "semgrep-java did not complete successfully."
+            exit 1
+          fi
+          if [[ "${{ needs.semgrep-general.result }}" != "success" && "${{ needs.semgrep-general.result }}" != "skipped" ]]; then
+            echo "semgrep-general did not complete successfully."
+            exit 1
+          fi
+
+          echo "All checks passed."

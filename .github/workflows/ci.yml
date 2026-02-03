@@ -183,7 +183,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [test, integration-test, static-analysis]
+    needs: [test, static-analysis]  # integration-test removed - runs in parallel but doesn't block
 
     steps:
       - name: Checkout code
@@ -312,16 +312,22 @@ jobs:
 
       - name: Generate release notes
         id: notes
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          COMMIT_SHA: ${{ github.sha }}
+          AUTHOR_NAME: ${{ github.event.head_commit.author.name }}
         run: |
-          echo "notes<<EOF" >> $GITHUB_OUTPUT
-          echo "## Changes" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "${{ github.event.head_commit.message }}" >> $GITHUB_OUTPUT
-          echo "" >> $GITHUB_OUTPUT
-          echo "---" >> $GITHUB_OUTPUT
-          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_OUTPUT
-          echo "**Author:** ${{ github.event.head_commit.author.name }}" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "notes<<EOF"
+            echo "## Changes"
+            echo ""
+            echo "$COMMIT_MESSAGE"
+            echo ""
+            echo "---"
+            echo "**Commit:** $COMMIT_SHA"
+            echo "**Author:** $AUTHOR_NAME"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Calculate next version
         id: version

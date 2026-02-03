@@ -38,9 +38,16 @@ This is a Kafka Connect sink connector that writes data to DuckLake (DuckDB + ob
 
 ### Buffering Configuration
 The sink buffers data before writing based on three thresholds:
-- `flush.size`: Number of records (default: 10000)
+- `flush.size`: Number of records (default: 1000000)
 - `flush.interval.ms`: Time interval in ms (default: 60000)
 - `file.size.bytes`: Estimated file size in bytes (default: 256MB)
+
+### Disk Spill (Memory Optimization)
+For high-memory workloads, enable disk spilling to reduce Arrow memory pressure:
+- `spill.enabled`: Set to `true` to spill Arrow batches to disk instead of memory
+- `spill.directory`: Directory for spill files (default: system temp)
+
+When enabled, batches are written to disk as Arrow IPC files immediately after conversion, then read back at flush time. This reduces per-task memory from ~6-7GB to a few MB.
 
 ### Thread Safety
 - Uses `ReentrantLock` for coordinating between `put()` and scheduled flush
@@ -100,10 +107,26 @@ The `data.path` config must use proper URI schemes:
 
 Validation is in `DucklakeSinkConfig.validateDataPath()`.
 
+## Java Version
+
+This project requires **Java 17-21** for local development. The google-java-format plugin used by Spotless doesn't work with Java 22+.
+
+Use [mise](https://mise.jdx.dev/) to manage Java versions:
+```bash
+# Install Java 21
+mise use java@21
+
+# Or set for this project only
+echo "java 21" >> .mise.toml
+```
+
+CI uses Java 17.
+
 ## Code Style
 - Uses Spotless with Google Java Format
 - Run `./gradlew spotlessApply` before committing
 - SpotBugs for static analysis (avoid patterns like volatile increment - use AtomicInteger)
+- **No wildcard imports** - use specific imports (e.g., `import static org.junit.jupiter.api.Assertions.assertEquals` not `.*`)
 
 ## Logging
 All classes use SLF4J logging:
@@ -121,3 +144,33 @@ When creating PRs, explicitly specify the repo:
 ```bash
 gh pr create --repo PostHog/ducklake-kafka-connect
 ```
+
+## Production Deployment
+
+### Kubernetes / Strimzi
+The connector is typically deployed via Strimzi KafkaConnector CRD. Key settings:
+- `tasksMax`: Number of parallel tasks (typically 2-3 per worker pod)
+- `consumer.override.max.poll.interval.ms`: Increase for large batches (default 900000, consider 1800000)
+- `consumer.override.max.poll.records`: Records per poll (balance with memory)
+
+### Common Production Issues
+
+**OOM / Memory Pressure**
+- Symptom: Pods OOMKilled, high `allocatorBytes` in logs
+- Fix: Reduce `tasksMax`, enable `spill.enabled=true`, or reduce `file.size.bytes`
+
+**Consumer Group Rebalancing**
+- Symptom: Frequent "SyncGroup failed", "group is already rebalancing" in logs
+- Fix: Increase `consumer.override.max.poll.interval.ms`, reduce task count
+
+**Schema Mismatch / Small Batches**
+- Symptom: "Cannot consolidate X batches due to schema mismatch", many small files
+- Cause: Records in same partition have different schemas (fields appearing/disappearing)
+- Impact: Batches written individually instead of consolidated, smaller files
+
+### Monitoring
+Key log patterns to watch:
+- `Flush triggered for partition` - normal flush activity
+- `allocatorBytes=` - Arrow memory usage per task
+- `schema mismatch` - schema variation causing small files
+- `poll timeout` - task taking too long, will trigger rebalance

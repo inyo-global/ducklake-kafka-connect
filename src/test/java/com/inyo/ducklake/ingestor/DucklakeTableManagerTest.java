@@ -100,12 +100,13 @@ class DucklakeTableManagerTest {
     mgr.ensureTable(s);
 
     // Verify existence via DuckDB PRAGMA in catalog 'lake'
+    // Note: +1 column for _inserted_at system column
     try (PreparedStatement ps =
         conn.prepareStatement("SELECT COUNT(*) FROM pragma_table_info(?)")) {
       ps.setString(1, "lake.main." + SqlIdentifierUtil.quote(tableName));
       try (ResultSet rs = ps.executeQuery()) {
         assertTrue(rs.next());
-        assertEquals(2, rs.getInt(1));
+        assertEquals(3, rs.getInt(1));
       }
     }
   }
@@ -134,7 +135,7 @@ class DucklakeTableManagerTest {
     mgr.ensureTable(schema(intField("a", 32), stringField("b")));
 
     Set<String> cols = getColumns(tableName);
-    assertEquals(Set.of("a", "b"), cols);
+    assertEquals(Set.of("a", "b", DucklakeTableManager.INSERTED_AT_COLUMN), cols);
   }
 
   @Test
@@ -148,8 +149,8 @@ class DucklakeTableManagerTest {
     mgr.ensureTable(schema(intField("num", 64)));
     // new definition with INT32 should be accepted
     mgr.ensureTable(schema(intField("num", 32)));
-    // still only one column
-    assertEquals(Set.of("num"), getColumns(tableName));
+    // still only one column (plus _inserted_at)
+    assertEquals(Set.of("num", DucklakeTableManager.INSERTED_AT_COLUMN), getColumns(tableName));
   }
 
   @Test
@@ -177,7 +178,7 @@ class DucklakeTableManagerTest {
     mgr.ensureTable(schema(intField("x", 32), stringField("y")));
     // same definition again
     mgr.ensureTable(schema(intField("x", 32), stringField("y")));
-    assertEquals(Set.of("x", "y"), getColumns(tableName));
+    assertEquals(Set.of("x", "y", DucklakeTableManager.INSERTED_AT_COLUMN), getColumns(tableName));
   }
 
   @Test
@@ -189,7 +190,7 @@ class DucklakeTableManagerTest {
     DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
     mgr.ensureTable(schema(floatField("v", true))); // DOUBLE
     mgr.ensureTable(schema(floatField("v", false))); // expected FLOAT
-    assertEquals(Set.of("v"), getColumns(tableName));
+    assertEquals(Set.of("v", DucklakeTableManager.INSERTED_AT_COLUMN), getColumns(tableName));
   }
 
   @Test
@@ -306,6 +307,123 @@ class DucklakeTableManagerTest {
         assertThrows(
             IllegalStateException.class, () -> mgr.ensureTable(schema(stringField("payload"))));
     assertTrue(ex.getMessage().contains("Incompatible type"));
+  }
+
+  @Test
+  @DisplayName("Creates _inserted_at column with new table")
+  void testInsertedAtColumnCreatedWithNewTable() throws Exception {
+    String tableName = uniqueTableName("t_inserted_at_new");
+    DucklakeWriterConfig cfg =
+        new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
+    DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
+    mgr.ensureTable(schema(intField("id", 32), stringField("name")));
+
+    // Verify _inserted_at column exists
+    Set<String> cols = getColumns(tableName);
+    assertTrue(
+        cols.contains(DucklakeTableManager.INSERTED_AT_COLUMN),
+        "Should contain _inserted_at column");
+    assertEquals(Set.of("id", "name", DucklakeTableManager.INSERTED_AT_COLUMN), cols);
+
+    // Verify column type is TIMESTAMP
+    assertColumnType(tableName, DucklakeTableManager.INSERTED_AT_COLUMN, "TIMESTAMP");
+  }
+
+  @Test
+  @DisplayName("Adds _inserted_at column to existing table during evolution")
+  void testInsertedAtColumnAddedDuringEvolution() throws Exception {
+    String tableName = uniqueTableName("t_inserted_at_evolve");
+
+    // Create table directly without _inserted_at column (simulating legacy table)
+    try (var st = conn.createStatement()) {
+      st.execute(
+          "CREATE TABLE lake.main."
+              + SqlIdentifierUtil.quote(tableName)
+              + " (id INTEGER, name VARCHAR)");
+    }
+
+    // Verify _inserted_at doesn't exist yet
+    Set<String> colsBefore = getColumns(tableName);
+    assertEquals(Set.of("id", "name"), colsBefore);
+
+    // Now use DucklakeTableManager to evolve the schema
+    DucklakeWriterConfig cfg =
+        new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
+    DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
+    mgr.ensureTable(schema(intField("id", 32), stringField("name")));
+
+    // Verify _inserted_at was added
+    Set<String> colsAfter = getColumns(tableName);
+    assertTrue(
+        colsAfter.contains(DucklakeTableManager.INSERTED_AT_COLUMN),
+        "Should contain _inserted_at column after evolution");
+    assertColumnType(tableName, DucklakeTableManager.INSERTED_AT_COLUMN, "TIMESTAMP");
+  }
+
+  @Test
+  @DisplayName("_inserted_at column exists and accepts explicit timestamp values")
+  void testInsertedAtColumnAcceptsTimestamp() throws Exception {
+    String tableName = uniqueTableName("t_inserted_at_explicit");
+    DucklakeWriterConfig cfg =
+        new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
+    DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
+    mgr.ensureTable(schema(intField("id", 32)));
+
+    // Insert a row with explicit _inserted_at value (as DucklakeWriter would do)
+    try (var st = conn.createStatement()) {
+      st.execute(
+          "INSERT INTO lake.main."
+              + SqlIdentifierUtil.quote(tableName)
+              + " (id, "
+              + SqlIdentifierUtil.quote(DucklakeTableManager.INSERTED_AT_COLUMN)
+              + ") VALUES (1, NOW())");
+    }
+
+    // Verify _inserted_at was populated
+    try (var ps =
+        conn.prepareStatement(
+            "SELECT "
+                + SqlIdentifierUtil.quote(DucklakeTableManager.INSERTED_AT_COLUMN)
+                + " FROM lake.main."
+                + SqlIdentifierUtil.quote(tableName)
+                + " WHERE id = 1")) {
+      try (var rs = ps.executeQuery()) {
+        assertTrue(rs.next(), "Should have one row");
+        var timestamp = rs.getTimestamp(1);
+        assertTrue(timestamp != null, "_inserted_at should have the inserted timestamp");
+      }
+    }
+  }
+
+  @Test
+  @DisplayName("Recovers gracefully when cached table is dropped externally")
+  void testStaleCacheRecovery() throws Exception {
+    String tableName = uniqueTableName("t_stale_cache");
+    DucklakeWriterConfig cfg =
+        new DucklakeWriterConfig(tableName, true, new String[] {}, new String[0]);
+    DucklakeTableManager mgr = new DucklakeTableManager(conn, cfg);
+
+    // Create table via ensureTable - this caches the table as verified
+    Schema s = schema(intField("id", 32), stringField("name"));
+    mgr.ensureTable(s);
+    assertTrue(mgr.tableExists(tableName), "Table should exist after creation");
+
+    // Drop the table directly via SQL (simulating external deletion or metadata reset)
+    try (var st = conn.createStatement()) {
+      st.execute("DROP TABLE lake.main." + SqlIdentifierUtil.quote(tableName));
+    }
+
+    // Verify table is actually gone
+    assertTrue(!mgr.tableExists(tableName), "Table should not exist after DROP");
+
+    // Call ensureTable again - should recover by invalidating cache and recreating
+    // Before the fix, this would throw: "Catalog Error: Table with name X does not exist!"
+    mgr.ensureTable(s);
+
+    // Verify table was recreated (now includes _inserted_at column)
+    assertTrue(mgr.tableExists(tableName), "Table should exist after recovery");
+    assertEquals(
+        Set.of("id", "name", DucklakeTableManager.INSERTED_AT_COLUMN), getColumns(tableName));
   }
 
   private Set<String> getColumns(String table) throws Exception {
