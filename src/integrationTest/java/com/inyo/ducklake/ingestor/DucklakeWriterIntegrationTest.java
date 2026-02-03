@@ -17,7 +17,6 @@ package com.inyo.ducklake.ingestor;
 
 import com.inyo.ducklake.connect.DucklakeConnectionFactory;
 import com.inyo.ducklake.connect.DucklakeSinkConfig;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -171,6 +170,7 @@ class DucklakeWriterIntegrationTest {
     }
   }
 
+  @SuppressWarnings("java:S2077") // Suppress SQL injection warning - table names are test-controlled
   // Counts how many ids from the provided array already exist in lake.main.<table>
   private int countConflicts(org.duckdb.DuckDBConnection conn, String table, int[] ids)
       throws SQLException {
@@ -210,24 +210,25 @@ class DucklakeWriterIntegrationTest {
     return ids;
   }
 
+  @SuppressWarnings("java:S2077") // Suppress SQL injection warning - table names are test-controlled
   private int tableCount(org.duckdb.DuckDBConnection conn, String table) throws SQLException {
-    try (PreparedStatement ps =
-        conn.prepareStatement("SELECT COUNT(*) FROM lake.main." + SqlIdentifierUtil.quote(table))) {
-      try (ResultSet rs = ps.executeQuery()) {
+    String sql = "SELECT COUNT(*) FROM lake.main." + SqlIdentifierUtil.quote(table);
+    try (var st = conn.createStatement()) {
+      try (ResultSet rs = st.executeQuery(sql)) {
         rs.next();
         return rs.getInt(1);
       }
     }
   }
 
+  @SuppressWarnings("java:S2077") // Suppress SQL injection warning - table names are test-controlled
   private void populateBaseline(
       org.duckdb.DuckDBConnection conn, String table, int count, int batchSize)
       throws SQLException {
-    sqlExec(
-        conn,
-        "CREATE TABLE IF NOT EXISTS lake.main."
-            + SqlIdentifierUtil.quote(table)
-            + " (id INTEGER, name VARCHAR, created_at TIMESTAMP)");
+    String createTableSql =
+        "CREATE TABLE IF NOT EXISTS lake.main." + SqlIdentifierUtil.quote(table) +
+        " (id INTEGER, name VARCHAR, created_at TIMESTAMP)";
+    sqlExec(conn, createTableSql);
     var batch = batchSize;
     var inserted = 0;
     while (inserted < count) {
@@ -264,18 +265,18 @@ class DucklakeWriterIntegrationTest {
 
       try (var conn = factory.getConnection()) {
         // cleanup + create tables
-        sqlExec(conn, "DROP TABLE IF EXISTS lake.main." + SqlIdentifierUtil.quote(tableMerge));
-        sqlExec(conn, "DROP TABLE IF EXISTS lake.main." + SqlIdentifierUtil.quote(tableInsert));
-        sqlExec(
-            conn,
-            "CREATE TABLE lake.main."
-                + SqlIdentifierUtil.quote(tableMerge)
-                + " (id INTEGER, name VARCHAR, created_at TIMESTAMP)");
-        sqlExec(
-            conn,
-            "CREATE TABLE lake.main."
-                + SqlIdentifierUtil.quote(tableInsert)
-                + " (id INTEGER, name VARCHAR, created_at TIMESTAMP)");
+        String dropMergeSql = "DROP TABLE IF EXISTS lake.main." + SqlIdentifierUtil.quote(tableMerge);
+        String dropInsertSql = "DROP TABLE IF EXISTS lake.main." + SqlIdentifierUtil.quote(tableInsert);
+        sqlExec(conn, dropMergeSql);
+        sqlExec(conn, dropInsertSql);
+        String createMergeSql =
+            "CREATE TABLE lake.main." + SqlIdentifierUtil.quote(tableMerge) +
+            " (id INTEGER, name VARCHAR, created_at TIMESTAMP)";
+        String createInsertSql =
+            "CREATE TABLE lake.main." + SqlIdentifierUtil.quote(tableInsert) +
+            " (id INTEGER, name VARCHAR, created_at TIMESTAMP)";
+        sqlExec(conn, createMergeSql);
+        sqlExec(conn, createInsertSql);
 
         System.out.printf(
             "%n=== Integration: conflict rate %d%% (tables: %s / %s) ===%n",
@@ -361,18 +362,18 @@ class DucklakeWriterIntegrationTest {
 
         try (var conn = factory.getConnection()) {
           // cleanup + create tables
-          sqlExec(conn, "DROP TABLE IF EXISTS lake.main." + SqlIdentifierUtil.quote(tableMerge));
-          sqlExec(conn, "DROP TABLE IF EXISTS lake.main." + SqlIdentifierUtil.quote(tableInsert));
-          sqlExec(
-              conn,
-              "CREATE TABLE lake.main."
-                  + SqlIdentifierUtil.quote(tableMerge)
-                  + " (id INTEGER, name VARCHAR, created_at TIMESTAMP)");
-          sqlExec(
-              conn,
-              "CREATE TABLE lake.main."
-                  + SqlIdentifierUtil.quote(tableInsert)
-                  + " (id INTEGER, name VARCHAR, created_at TIMESTAMP)");
+          String dropMergeSql = "DROP TABLE IF EXISTS lake.main." + SqlIdentifierUtil.quote(tableMerge);
+          String dropInsertSql = "DROP TABLE IF EXISTS lake.main." + SqlIdentifierUtil.quote(tableInsert);
+          sqlExec(conn, dropMergeSql);
+          sqlExec(conn, dropInsertSql);
+          String createMergeSql =
+              "CREATE TABLE lake.main." + SqlIdentifierUtil.quote(tableMerge) +
+              " (id INTEGER, name VARCHAR, created_at TIMESTAMP)";
+          String createInsertSql =
+              "CREATE TABLE lake.main." + SqlIdentifierUtil.quote(tableInsert) +
+              " (id INTEGER, name VARCHAR, created_at TIMESTAMP)";
+          sqlExec(conn, createMergeSql);
+          sqlExec(conn, createInsertSql);
 
           System.out.printf(
               "%n=== Integration stats: conflict rate %d%% (tables: %s / %s) ===%n",
