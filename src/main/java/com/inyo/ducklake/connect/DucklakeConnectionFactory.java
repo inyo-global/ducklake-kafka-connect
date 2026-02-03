@@ -15,11 +15,9 @@
  */
 package com.inyo.ducklake.connect;
 
-import edu.umd.cs.findbugs.annotations.NonNull;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.util.Properties;
 import org.duckdb.DuckDBConnection;
 
