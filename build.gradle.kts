@@ -142,7 +142,11 @@ spotless {
     java {
         target("src/**/*.java")
         licenseHeaderFile("config/spotless.license.java", "package ")
+<<<<<<< HEAD
         googleJavaFormat("1.33.0")
+=======
+        googleJavaFormat("1.17.0")
+>>>>>>> a9b5f2145b97c277282404ef64e314e91ddf7225
         removeUnusedImports()
         trimTrailingWhitespace()
         endWithNewline()
