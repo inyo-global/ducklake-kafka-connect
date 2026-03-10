@@ -1372,7 +1372,14 @@ public class DucklakeSinkTask extends SinkTask {
 
       return consolidated;
     } catch (Exception e) {
-      // Clean up on failure
+      // Clean up on failure and fall back to individual writes instead of crashing the task.
+      // This handles cases where VectorBatchAppender rejects vectors with mismatched types
+      // (e.g., after schema unification produces vectors that are structurally compatible
+      // but have different concrete Arrow vector classes).
+      LOG.warn(
+          "Failed to consolidate {} batches (will write individually): {}",
+          unifiedBatches.size(),
+          e.getMessage());
       try {
         consolidated.close();
       } catch (Exception closeEx) {
@@ -1388,7 +1395,7 @@ public class DucklakeSinkTask extends SinkTask {
           }
         }
       }
-      throw e;
+      return null;
     }
   }
 
