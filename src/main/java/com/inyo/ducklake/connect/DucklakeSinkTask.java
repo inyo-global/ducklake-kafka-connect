@@ -42,6 +42,7 @@ import java.util.stream.Stream;
 import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.memory.RootAllocator;
 import org.apache.arrow.vector.BigIntVector;
+import org.apache.arrow.vector.BitVector;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.Float4Vector;
 import org.apache.arrow.vector.Float8Vector;
@@ -1072,8 +1073,8 @@ public class DucklakeSinkTask extends SinkTask {
           for (int row = 0; row < rowCount; row++) {
             targetVector.setNull(row);
           }
-        } else if (sourceVector.getField().getType().equals(targetVector.getField().getType())) {
-          // Same type - direct copy
+        } else if (sourceVector.getField().equals(targetVector.getField())) {
+          // Identical field (type, nullability, children) - direct copy is safe
           for (int row = 0; row < rowCount; row++) {
             targetVector.copyFromSafe(row, row, sourceVector);
           }
@@ -1209,6 +1210,66 @@ public class DucklakeSinkTask extends SinkTask {
           float8Target.setNull(row);
         } else {
           float8Target.setSafe(row, bigIntSource.get(row));
+        }
+      }
+      return true;
+    }
+
+    // Bool to Int32 promotion
+    if (source instanceof BitVector bitSource && target instanceof IntVector intTarget) {
+      for (int row = 0; row < rowCount; row++) {
+        if (bitSource.isNull(row)) {
+          intTarget.setNull(row);
+        } else {
+          intTarget.setSafe(row, bitSource.get(row));
+        }
+      }
+      return true;
+    }
+
+    // Bool to Int64 promotion
+    if (source instanceof BitVector bitSource && target instanceof BigIntVector bigIntTarget) {
+      for (int row = 0; row < rowCount; row++) {
+        if (bitSource.isNull(row)) {
+          bigIntTarget.setNull(row);
+        } else {
+          bigIntTarget.setSafe(row, bitSource.get(row));
+        }
+      }
+      return true;
+    }
+
+    // Bool to Float64 promotion
+    if (source instanceof BitVector bitSource && target instanceof Float8Vector float8Target) {
+      for (int row = 0; row < rowCount; row++) {
+        if (bitSource.isNull(row)) {
+          float8Target.setNull(row);
+        } else {
+          float8Target.setSafe(row, bitSource.get(row));
+        }
+      }
+      return true;
+    }
+
+    // TinyInt to Int32 promotion
+    if (source instanceof TinyIntVector tinyIntSource && target instanceof IntVector intTarget) {
+      for (int row = 0; row < rowCount; row++) {
+        if (tinyIntSource.isNull(row)) {
+          intTarget.setNull(row);
+        } else {
+          intTarget.setSafe(row, tinyIntSource.get(row));
+        }
+      }
+      return true;
+    }
+
+    // SmallInt to Int32 promotion
+    if (source instanceof SmallIntVector smallIntSource && target instanceof IntVector intTarget) {
+      for (int row = 0; row < rowCount; row++) {
+        if (smallIntSource.isNull(row)) {
+          intTarget.setNull(row);
+        } else {
+          intTarget.setSafe(row, smallIntSource.get(row));
         }
       }
       return true;
