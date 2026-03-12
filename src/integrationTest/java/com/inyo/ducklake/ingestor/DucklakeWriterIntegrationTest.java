@@ -50,7 +50,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  */
 @Testcontainers
 @EnabledIfDockerAvailable
-@org.junit.jupiter.api.Disabled("Upstream test: S3 403 on connection.duplicate() - needs investigation")
+@org.junit.jupiter.api.Disabled(
+    "Upstream test: S3 403 on connection.duplicate() - needs investigation")
 class DucklakeWriterIntegrationTest {
 
   private static final Network NETWORK = Network.newNetwork();
