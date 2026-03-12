@@ -1332,14 +1332,13 @@ public class DucklakeSinkTask extends SinkTask {
 
       // Cast each batch to the unified schema
       unifiedBatches = new ArrayList<>(batches.size());
-      List<VectorSchemaRoot> batchesToClose = new ArrayList<>();
       try {
         for (VectorSchemaRoot batch : batches) {
           VectorSchemaRoot castedBatch = castBatchToSchema(batch, unifiedSchema);
           if (castedBatch == null) {
             // Casting failed - clean up and fall back to individual writes
             LOG.warn("Failed to cast batch to unified schema - will write individually");
-            for (VectorSchemaRoot toClose : batchesToClose) {
+            for (VectorSchemaRoot toClose : unifiedBatches) {
               try {
                 toClose.close();
               } catch (Exception closeEx) {
@@ -1349,11 +1348,10 @@ public class DucklakeSinkTask extends SinkTask {
             return null;
           }
           unifiedBatches.add(castedBatch);
-          batchesToClose.add(castedBatch);
         }
       } catch (Exception e) {
         // Clean up any casted batches on failure
-        for (VectorSchemaRoot toClose : batchesToClose) {
+        for (VectorSchemaRoot toClose : unifiedBatches) {
           try {
             toClose.close();
           } catch (Exception closeEx) {
