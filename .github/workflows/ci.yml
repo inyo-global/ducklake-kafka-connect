@@ -345,7 +345,7 @@ jobs:
           echo "Next version: $NEXT_VERSION"
 
       - name: Create release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
         with:
           files: |
             build/libs/*.jar
