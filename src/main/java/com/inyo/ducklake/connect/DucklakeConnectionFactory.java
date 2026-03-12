@@ -66,7 +66,7 @@ public class DucklakeConnectionFactory {
       st.execute(statement);
 
       // Configure DuckLake retry count for handling PostgreSQL serialization conflicts
-      int maxRetryCount = config.getDucklakeMaxRetryCount();
+      final var maxRetryCount = config.getDucklakeMaxRetryCount();
       st.execute("SET ducklake_max_retry_count = " + maxRetryCount);
     }
   }
@@ -99,7 +99,7 @@ public class DucklakeConnectionFactory {
       throw new IllegalStateException("Connection not initialized. Call create() first.");
     }
     try {
-      return (DuckDBConnection) conn.duplicate();
+      return conn.duplicate();
     } catch (SQLException e) {
       throw new RuntimeException("Failed to duplicate DuckDB connection", e);
     }

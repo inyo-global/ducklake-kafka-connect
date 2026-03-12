@@ -1,0 +1,137 @@
+{
+  "lockfile-version": 1,
+  "manifest": {
+    "schema-version": "1.10.0",
+    "install": {
+      "jdk21": {
+        "pkg-path": "jdk21"
+      }
+    },
+    "hook": {},
+    "profile": {},
+    "options": {}
+  },
+  "packages": [
+    {
+      "attr_path": "jdk21",
+      "broken": false,
+      "derivation": "/nix/store/0jn640fwvdfvwp3c9gmxa7c556x7msfn-zulu-ca-jdk-21.0.8.drv",
+      "description": "Certified builds of OpenJDK",
+      "install_id": "jdk21",
+      "license": "GPL-2.0-only",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "zulu-ca-jdk-21.0.8",
+      "pname": "jdk21",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T04:46:53.064863Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "21.0.8",
+      "outputs_to_install": [
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/pc2g9bpx9ajpwg11c9y20k3rxb1xjg1i-zulu-ca-jdk-21.0.8"
+      },
+      "system": "aarch64-darwin",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "jdk21",
+      "broken": false,
+      "derivation": "/nix/store/xlkk5sx703xi5hxs4iqk343k11cbr9jv-openjdk-21.0.10+7.drv",
+      "description": "Open-source Java Development Kit",
+      "install_id": "jdk21",
+      "license": "GPL-2.0-only",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "openjdk-21.0.10+7",
+      "pname": "jdk21",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T05:23:21.191954Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "21.0.10+7",
+      "outputs_to_install": [
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "debug": "/nix/store/z912h5a1ym3pw351pafrirw9dl3xy6fm-openjdk-21.0.10+7-debug",
+        "out": "/nix/store/dmi3dkyzj86zh8p2km8bab805mq5g48d-openjdk-21.0.10+7"
+      },
+      "system": "aarch64-linux",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "jdk21",
+      "broken": false,
+      "derivation": "/nix/store/aj62b4x6lan3pxgwm424308lxnz4j3kc-zulu-ca-jdk-21.0.8.drv",
+      "description": "Certified builds of OpenJDK",
+      "install_id": "jdk21",
+      "license": "GPL-2.0-only",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "zulu-ca-jdk-21.0.8",
+      "pname": "jdk21",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:04:07.864066Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "21.0.8",
+      "outputs_to_install": [
+        "out"
+      ],
+      "outputs": {
+        "out": "/nix/store/j8w1f5zh84brh5f4r8qkbig28d2svj3f-zulu-ca-jdk-21.0.8"
+      },
+      "system": "x86_64-darwin",
+      "group": "toplevel",
+      "priority": 5
+    },
+    {
+      "attr_path": "jdk21",
+      "broken": false,
+      "derivation": "/nix/store/9bxmpjc45lrsali2rfjb6fhg1lxxr35w-openjdk-21.0.10+7.drv",
+      "description": "Open-source Java Development Kit",
+      "install_id": "jdk21",
+      "license": "GPL-2.0-only",
+      "locked_url": "https://github.com/flox/nixpkgs?rev=9dcb002ca1690658be4a04645215baea8b95f31d",
+      "name": "openjdk-21.0.10+7",
+      "pname": "jdk21",
+      "rev": "9dcb002ca1690658be4a04645215baea8b95f31d",
+      "rev_count": 960399,
+      "rev_date": "2026-03-08T09:52:19Z",
+      "scrape_date": "2026-03-10T06:47:27.355355Z",
+      "stabilities": [
+        "unstable"
+      ],
+      "unfree": false,
+      "version": "21.0.10+7",
+      "outputs_to_install": [
+        "out",
+        "out"
+      ],
+      "outputs": {
+        "debug": "/nix/store/cfixdn7kphjaf6wnvjddy7dvpyk3lw4d-openjdk-21.0.10+7-debug",
+        "out": "/nix/store/2c52z0rvldik0rll2xz2ip5dl1c8f3pw-openjdk-21.0.10+7"
+      },
+      "system": "x86_64-linux",
+      "group": "toplevel",
+      "priority": 5
+    }
+  ]
+}

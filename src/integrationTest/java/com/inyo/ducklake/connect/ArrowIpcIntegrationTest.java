@@ -24,6 +24,7 @@ import io.minio.MakeBucketArgs;
 import io.minio.MinioClient;
 import java.io.ByteArrayOutputStream;
 import java.nio.channels.Channels;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
@@ -53,11 +54,13 @@ import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
 import org.testcontainers.shaded.org.awaitility.Awaitility;
 
 @Testcontainers
+@EnabledIfDockerAvailable
 class ArrowIpcIntegrationTest {
 
   private static final Network network = Network.newNetwork();
@@ -282,7 +285,7 @@ class ArrowIpcIntegrationTest {
       var ageVector = (IntVector) root.getVector("age");
 
       idVector.setSafe(0, 1001);
-      nameVector.setSafe(0, name.getBytes());
+      nameVector.setSafe(0, name.getBytes(StandardCharsets.UTF_8));
       ageVector.setSafe(0, age);
 
       root.setRowCount(1);

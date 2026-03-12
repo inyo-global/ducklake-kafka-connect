@@ -15,6 +15,7 @@
  */
 package com.inyo.ducklake.ingestor;
 
+import com.inyo.ducklake.connect.DucklakeMetrics;
 import java.sql.SQLException;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -38,12 +39,19 @@ public final class DucklakeWriter implements AutoCloseable {
   private final DuckDBConnection connection;
   private final DucklakeWriterConfig config;
   private final DucklakeTableManager tableManager;
+  private final DucklakeMetrics metrics;
 
   public DucklakeWriter(DuckDBConnection connection, DucklakeWriterConfig config) {
+    this(connection, config, null);
+  }
+
+  public DucklakeWriter(
+      DuckDBConnection connection, DucklakeWriterConfig config, DucklakeMetrics metrics) {
     if (connection == null) {
       throw new IllegalArgumentException("DuckDBConnection cannot be null");
     }
     this.config = config;
+    this.metrics = metrics;
     try {
       // Defensive duplicate so internal state is isolated from caller
       this.connection = (DuckDBConnection) connection.duplicate();
@@ -161,8 +169,15 @@ public final class DucklakeWriter implements AutoCloseable {
 
       LOG.debug("Executing MERGE: {}", sql);
       try (var ps = connection.prepareStatement(sql.toString())) {
-        int affected = ps.executeUpdate();
-        LOG.info("MERGE affected {} rows on table {}", affected, config.destinationTable());
+        if (metrics != null) {
+          try (var timer = metrics.startJdbcQueryTimer("upsertWithMergeInto")) {
+            int affected = ps.executeUpdate();
+            LOG.info("MERGE affected {} rows on table {}", affected, config.destinationTable());
+          }
+        } else {
+          int affected = ps.executeUpdate();
+          LOG.info("MERGE affected {} rows on table {}", affected, config.destinationTable());
+        }
       }
     }
     try (var dropPs = connection.prepareStatement("DROP VIEW IF EXISTS " + tempTable)) {
@@ -212,9 +227,17 @@ public final class DucklakeWriter implements AutoCloseable {
 
       LOG.debug("Executing simple INSERT: {}", sql);
       try (var ps = connection.prepareStatement(sql.toString())) {
-        int affected = ps.executeUpdate();
-        LOG.debug(
-            "Simple INSERT affected {} rows on table {}", affected, config.destinationTable());
+        if (metrics != null) {
+          try (var timer = metrics.startJdbcQueryTimer("simpleInsert")) {
+            int affected = ps.executeUpdate();
+            LOG.debug(
+                "Simple INSERT affected {} rows on table {}", affected, config.destinationTable());
+          }
+        } else {
+          int affected = ps.executeUpdate();
+          LOG.debug(
+              "Simple INSERT affected {} rows on table {}", affected, config.destinationTable());
+        }
       }
     }
     // Drop the temp view to avoid memory leaks

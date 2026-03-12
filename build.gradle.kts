@@ -3,7 +3,7 @@ plugins {
     id("distribution")
     id("com.gradleup.shadow") version "9.1.0"
     id("com.github.spotbugs") version "6.0.18"
-    id("com.diffplug.spotless") version "6.25.0"
+    id("com.diffplug.spotless") version "8.2.1"
 }
 
 group = "com.inyo"
@@ -78,6 +78,10 @@ val integrationTest by tasks.registering(Test::class) {
 
     useJUnitPlatform()
 
+    // Unset SSL_CERT_FILE to prevent minio-java's HttpUtils.enableExternalCertificates()
+    // from choking on Nix/flox CA bundles (minio/minio-java#896)
+    environment("SSL_CERT_FILE", "")
+
     // Add JVM arguments required for Apache Arrow
     jvmArgs("--add-opens=java.base/java.nio=ALL-UNNAMED")
 
@@ -142,30 +146,35 @@ spotless {
     java {
         target("src/**/*.java")
         licenseHeaderFile("config/spotless.license.java", "package ")
-        googleJavaFormat()
+        googleJavaFormat("1.33.0")
         removeUnusedImports()
         trimTrailingWhitespace()
         endWithNewline()
-        custom("no-wildcard-imports") { content ->
-            if (content.contains("import .*\\*;".toRegex())) {
-                throw RuntimeException("Wildcard imports are not allowed. Use specific imports instead.")
-            }
-            content
-        }
-        custom("line-length-check") { content ->
-            val lines = content.split("\n")
-            lines.forEachIndexed { index, line ->
-                if (line.length > 120 && !line.trim().startsWith("//") && !line.contains("http")) {
-                    throw RuntimeException("Line ${index + 1} exceeds 120 characters: ${line.length} chars")
+        // Using serializable objects to avoid configuration cache issues
+        custom("no-wildcard-imports", object : java.io.Serializable, com.diffplug.spotless.FormatterFunc {
+            override fun apply(content: String): String {
+                if (content.contains("import .*\\*;".toRegex())) {
+                    throw RuntimeException("Wildcard imports are not allowed. Use specific imports instead.")
                 }
+                return content
             }
-            content
-        }
+        })
+        custom("line-length-check", object : java.io.Serializable, com.diffplug.spotless.FormatterFunc {
+            override fun apply(content: String): String {
+                val lines = content.split("\n")
+                lines.forEachIndexed { index, line ->
+                    if (line.length > 120 && !line.trim().startsWith("//") && !line.contains("http")) {
+                        throw RuntimeException("Line ${index + 1} exceeds 120 characters: ${line.length} chars")
+                    }
+                }
+                return content
+            }
+        })
     }
 }
 
 dependencies {
-    implementation("org.duckdb:duckdb_jdbc:1.4.2.0")
+    implementation("org.duckdb:duckdb_jdbc:1.4.3.0")
     implementation("org.apache.arrow:arrow-vector:18.3.0") {
         exclude(group = "org.slf4j")
     }
