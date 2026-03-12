@@ -78,6 +78,10 @@ val integrationTest by tasks.registering(Test::class) {
 
     useJUnitPlatform()
 
+    // Unset SSL_CERT_FILE to prevent minio-java's HttpUtils.enableExternalCertificates()
+    // from choking on Nix/flox CA bundles (minio/minio-java#896)
+    environment("SSL_CERT_FILE", "")
+
     // Add JVM arguments required for Apache Arrow
     jvmArgs("--add-opens=java.base/java.nio=ALL-UNNAMED")
 

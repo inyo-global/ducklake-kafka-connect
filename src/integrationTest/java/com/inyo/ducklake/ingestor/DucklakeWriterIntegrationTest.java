@@ -41,6 +41,7 @@ import org.testcontainers.containers.MinIOContainer;
 import org.testcontainers.containers.Network;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
@@ -48,6 +49,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  * MinIO for object storage. Based on EndToEndIntegrationTest conventions.
  */
 @Testcontainers
+@EnabledIfDockerAvailable
 class DucklakeWriterIntegrationTest {
 
   private static final Network NETWORK = Network.newNetwork();
