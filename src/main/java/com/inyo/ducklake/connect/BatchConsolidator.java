@@ -18,7 +18,6 @@ package com.inyo.ducklake.connect;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import org.apache.arrow.memory.BufferAllocator;
 import org.apache.arrow.vector.FieldVector;
 import org.apache.arrow.vector.VectorSchemaRoot;
 import org.apache.arrow.vector.types.pojo.Field;
@@ -38,12 +37,26 @@ class BatchConsolidator {
   private BatchConsolidator() {}
 
   /**
-   * Consolidates a list of batches into the minimum number of batches while preserving order. Takes
-   * ownership of all input batches — consumed batches are closed, and the returned list contains
-   * only roots the caller must write and close.
+   * Consolidates a list of batches into the minimum number of batches while preserving order.
+   *
+   * <p>Groups contiguous batches with compatible schemas into runs and merges each run via in-place
+   * append into the first batch of the run. Incompatible batches start a new run.
+   *
+   * <p><b>Ownership contract:</b> After this method returns, the caller must only use the returned
+   * list. Source batches consumed during consolidation (indices 1..N within each merged run) are
+   * closed internally. The returned list may contain original batch instances (for single-batch
+   * runs) or mutated first-batch instances (for merged runs). The caller must close every root in
+   * the returned list.
+   *
+   * <p><b>On failure:</b> If an exception is thrown, some source batches may have been partially
+   * consumed (closed) and the target batch may be in a corrupt state. The caller must close all
+   * original input batches to avoid leaking Arrow memory; double-close is safe.
+   *
+   * @param batches the input batches; must not be modified by the caller after this call
+   * @return a list of roots to write and close; never null
+   * @throws RuntimeException if in-place append fails (e.g. OOM during vector reallocation)
    */
-  static List<VectorSchemaRoot> consolidate(
-      List<VectorSchemaRoot> batches, BufferAllocator allocator) {
+  static List<VectorSchemaRoot> consolidate(List<VectorSchemaRoot> batches) {
     if (batches == null || batches.isEmpty()) {
       return Collections.emptyList();
     }
@@ -55,14 +68,10 @@ class BatchConsolidator {
     List<VectorSchemaRoot> result = new ArrayList<>(runs.size());
 
     for (List<VectorSchemaRoot> run : runs) {
-      try {
+      if (run.size() == 1) {
+        result.add(run.get(0));
+      } else {
         result.add(consolidateRun(run));
-      } catch (Exception e) {
-        LOG.warn(
-            "Failed to consolidate run of {} batches (will write individually): {}",
-            run.size(),
-            e.getMessage());
-        result.addAll(run);
       }
     }
 
@@ -99,13 +108,10 @@ class BatchConsolidator {
 
   /**
    * Consolidates a run of same-schema batches by appending in-place into the first batch. Closes
-   * consumed batches (index 1..N). Returns the first batch with all data appended.
+   * consumed batches (index 1..N). Returns the first batch with all data appended. Caller must
+   * ensure run.size() > 1.
    */
   private static VectorSchemaRoot consolidateRun(List<VectorSchemaRoot> run) {
-    if (run.size() == 1) {
-      return run.get(0);
-    }
-
     VectorSchemaRoot target = run.get(0);
     int totalRows = run.stream().mapToInt(VectorSchemaRoot::getRowCount).sum();
 

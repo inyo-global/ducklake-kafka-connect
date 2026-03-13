@@ -40,8 +40,8 @@ import org.testcontainers.kafka.KafkaContainer;
  * Reproduces the VectorAppender type mismatch bug that occurs when records in separate poll cycles
  * have different types for the same field (e.g., a field that is sometimes a string, sometimes a
  * number). Before the fix, consolidateBatches would crash the task. After the fix,
- * BatchConsolidator groups contiguous compatible batches and writes incompatible batches as separate
- * runs.
+ * BatchConsolidator groups contiguous compatible batches and writes incompatible batches as
+ * separate runs.
  */
 @Testcontainers
 class SchemaMismatchIntegrationTest {

@@ -778,17 +778,24 @@ public class DucklakeSinkTask extends SinkTask {
           flushData.estimatedBytes,
           actualAllocatedBytes);
 
-      List<VectorSchemaRoot> consolidated =
-          BatchConsolidator.consolidate(flushData.batches, allocator);
+      List<VectorSchemaRoot> consolidated;
+      try {
+        consolidated = BatchConsolidator.consolidate(flushData.batches);
+      } catch (RuntimeException e) {
+        // Consolidation failed mid-append — source batches may be partially consumed.
+        // Close all original batches to avoid leaking Arrow memory.
+        closeBatches(flushData.batches);
+        throw e;
+      }
       try {
         for (VectorSchemaRoot root : consolidated) {
           if (root.getRowCount() > 0) {
             writer.write(root);
           }
         }
-      } catch (Exception e) {
+      } catch (RuntimeException e) {
         LOG.error("Failed to write buffered data for partition: {}", partition, e);
-        throw new RuntimeException("Failed to flush buffered data", e);
+        throw e;
       } finally {
         closeBatches(consolidated);
       }

@@ -173,15 +173,14 @@ class BatchConsolidationTest {
 
     @Test
     void emptyList() {
-      List<VectorSchemaRoot> result =
-          BatchConsolidator.consolidate(Collections.emptyList(), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(Collections.emptyList());
       assertEquals(0, result.size());
     }
 
     @Test
     void singleBatch() {
       VectorSchemaRoot batch = createIntBatch(1, 2, 3);
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(batch), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(batch));
       assertEquals(1, result.size());
       assertSame(batch, result.get(0));
       assertIntValues(result.get(0), 1, 2, 3);
@@ -191,7 +190,7 @@ class BatchConsolidationTest {
     @Test
     void singleBatchZeroRows() {
       VectorSchemaRoot batch = createEmptyBatch(INT_SCHEMA);
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(batch), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(batch));
       assertEquals(1, result.size());
       assertSame(batch, result.get(0));
       assertEquals(0, result.get(0).getRowCount());
@@ -202,7 +201,7 @@ class BatchConsolidationTest {
     void twoBatches() {
       VectorSchemaRoot a = createIntBatch(1, 2, 3);
       VectorSchemaRoot b = createIntBatch(4, 5);
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       assertEquals(1, result.size());
       assertEquals(5, result.get(0).getRowCount());
       assertIntValues(result.get(0), 1, 2, 3, 4, 5);
@@ -222,7 +221,7 @@ class BatchConsolidationTest {
         batches.add(createIntBatch(values));
         expectedTotal += size;
       }
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(batches, allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(batches);
       assertEquals(1, result.size());
       assertEquals(expectedTotal, result.get(0).getRowCount());
       // Verify first and last values
@@ -237,7 +236,7 @@ class BatchConsolidationTest {
       VectorSchemaRoot a = createIntBatch(10, 20, 30);
       VectorSchemaRoot b = createIntBatch(40, 50, 60);
       VectorSchemaRoot c = createIntBatch(70);
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b, c), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b, c));
       assertEquals(1, result.size());
       assertIntValues(result.get(0), 10, 20, 30, 40, 50, 60, 70);
       closeAll(result);
@@ -250,7 +249,7 @@ class BatchConsolidationTest {
               new int[] {1, 2}, new String[] {"alice", "bob"}, new double[] {1.0, 2.0});
       VectorSchemaRoot b =
           createMultiColBatch(new int[] {3}, new String[] {"charlie"}, new double[] {3.0});
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       assertEquals(1, result.size());
       VectorSchemaRoot r = result.get(0);
       assertEquals(3, r.getRowCount());
@@ -275,7 +274,7 @@ class BatchConsolidationTest {
     void nullValuesPreserved() {
       VectorSchemaRoot a = createIntBatchWithNulls(1, null, 3);
       VectorSchemaRoot b = createIntBatchWithNulls(null, 5);
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       assertEquals(1, result.size());
       VectorSchemaRoot r = result.get(0);
       assertEquals(5, r.getRowCount());
@@ -295,7 +294,7 @@ class BatchConsolidationTest {
     void allNullColumn() {
       VectorSchemaRoot a = createIntBatchWithNulls(null, null);
       VectorSchemaRoot b = createIntBatchWithNulls(1, 2);
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       assertEquals(1, result.size());
       VectorSchemaRoot r = result.get(0);
       assertEquals(4, r.getRowCount());
@@ -316,7 +315,7 @@ class BatchConsolidationTest {
     void twoBatchesDifferentSchemas() {
       VectorSchemaRoot a = createIntBatch(1, 2);
       VectorSchemaRoot b = createStringBatch("x", "y");
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       assertEquals(2, result.size());
       assertEquals(2, result.get(0).getRowCount());
       assertEquals(2, result.get(1).getRowCount());
@@ -330,8 +329,7 @@ class BatchConsolidationTest {
       VectorSchemaRoot b = createStringBatch("x");
       VectorSchemaRoot a3 = createIntBatch(5, 6);
       VectorSchemaRoot a4 = createIntBatch(7, 8);
-      List<VectorSchemaRoot> result =
-          BatchConsolidator.consolidate(List.of(a1, a2, b, a3, a4), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a1, a2, b, a3, a4));
       assertEquals(3, result.size());
       // First run: two int batches consolidated
       assertIntValues(result.get(0), 1, 2, 3, 4);
@@ -350,8 +348,7 @@ class BatchConsolidationTest {
       VectorSchemaRoot b1 = createStringBatch("x");
       VectorSchemaRoot a2 = createIntBatch(2);
       VectorSchemaRoot b2 = createStringBatch("y");
-      List<VectorSchemaRoot> result =
-          BatchConsolidator.consolidate(List.of(a1, b1, a2, b2), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a1, b1, a2, b2));
       assertEquals(4, result.size());
       closeAll(result);
     }
@@ -362,8 +359,7 @@ class BatchConsolidationTest {
       VectorSchemaRoot a2 = createIntBatch(3, 4);
       VectorSchemaRoot a3 = createIntBatch(5);
       VectorSchemaRoot b = createStringBatch("x");
-      List<VectorSchemaRoot> result =
-          BatchConsolidator.consolidate(List.of(a1, a2, a3, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a1, a2, a3, b));
       assertEquals(2, result.size());
       assertIntValues(result.get(0), 1, 2, 3, 4, 5);
       assertEquals(1, result.get(1).getRowCount());
@@ -376,8 +372,7 @@ class BatchConsolidationTest {
       VectorSchemaRoot a1 = createIntBatch(1, 2);
       VectorSchemaRoot a2 = createIntBatch(3, 4);
       VectorSchemaRoot a3 = createIntBatch(5);
-      List<VectorSchemaRoot> result =
-          BatchConsolidator.consolidate(List.of(b, a1, a2, a3), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(b, a1, a2, a3));
       assertEquals(2, result.size());
       assertEquals(1, result.get(0).getRowCount());
       assertIntValues(result.get(1), 1, 2, 3, 4, 5);
@@ -393,7 +388,7 @@ class BatchConsolidationTest {
       VectorSchemaRoot c1 = createBigIntBatch(100L);
       VectorSchemaRoot c2 = createBigIntBatch(200L);
       List<VectorSchemaRoot> result =
-          BatchConsolidator.consolidate(List.of(a1, a2, b1, b2, c1, c2), allocator);
+          BatchConsolidator.consolidate(List.of(a1, a2, b1, b2, c1, c2));
       assertEquals(3, result.size());
       assertEquals(2, result.get(0).getRowCount());
       assertEquals(2, result.get(1).getRowCount());
@@ -411,7 +406,7 @@ class BatchConsolidationTest {
       for (int i = 100; i < 200; i++) {
         batches.add(createIntBatch(i));
       }
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(batches, allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(batches);
       assertEquals(3, result.size());
       assertEquals(100, result.get(0).getRowCount());
       assertEquals(1, result.get(1).getRowCount());
@@ -436,7 +431,7 @@ class BatchConsolidationTest {
     void orderWithinRun() {
       VectorSchemaRoot a = createIntBatch(1, 2);
       VectorSchemaRoot b = createIntBatch(3, 4);
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       assertEquals(1, result.size());
       assertIntValues(result.get(0), 1, 2, 3, 4);
       closeAll(result);
@@ -447,7 +442,7 @@ class BatchConsolidationTest {
       VectorSchemaRoot a1 = createIntBatch(1, 2);
       VectorSchemaRoot b = createStringBatch("mid");
       VectorSchemaRoot a2 = createIntBatch(3, 4);
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a1, b, a2), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a1, b, a2));
       assertEquals(3, result.size());
       assertIntValues(result.get(0), 1, 2);
       VarCharVector strVec = (VarCharVector) result.get(1).getVector("name");
@@ -473,7 +468,7 @@ class BatchConsolidationTest {
       ((IntVector) b.getVector("id")).setSafe(0, 3);
       b.setRowCount(1);
 
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       assertEquals(2, result.size());
       closeAll(result);
     }
@@ -489,7 +484,7 @@ class BatchConsolidationTest {
       ((IntVector) b.getVector("key")).setSafe(0, 2);
       b.setRowCount(1);
 
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       assertEquals(2, result.size());
       closeAll(result);
     }
@@ -518,8 +513,7 @@ class BatchConsolidationTest {
       ((IntVector) batchBA.getVector("a")).setSafe(0, 2);
       batchBA.setRowCount(1);
 
-      List<VectorSchemaRoot> result =
-          BatchConsolidator.consolidate(List.of(batchAB, batchBA), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(batchAB, batchBA));
       assertEquals(2, result.size());
       closeAll(result);
     }
@@ -542,7 +536,7 @@ class BatchConsolidationTest {
       b.allocateNew();
       b.setRowCount(0);
 
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       // Same schema — should consolidate
       assertEquals(1, result.size());
       closeAll(result);
@@ -574,7 +568,7 @@ class BatchConsolidationTest {
       b.allocateNew();
       b.setRowCount(0);
 
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       assertEquals(2, result.size());
       closeAll(result);
     }
@@ -597,7 +591,7 @@ class BatchConsolidationTest {
       b.allocateNew();
       b.setRowCount(0);
 
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       assertEquals(1, result.size());
       closeAll(result);
     }
@@ -633,7 +627,7 @@ class BatchConsolidationTest {
       ((IntVector) b.getVector("b")).setSafe(0, 2);
       b.setRowCount(1);
 
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       assertEquals(2, result.size());
       closeAll(result);
     }
@@ -718,7 +712,7 @@ class BatchConsolidationTest {
       long memBefore = allocator.getAllocatedMemory();
       assertTrue(memBefore > 0);
 
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b, c), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b, c));
       assertEquals(1, result.size());
       // Only the consolidated result should hold memory
       // (original batches b, c should be closed)
@@ -731,7 +725,7 @@ class BatchConsolidationTest {
     void allocatorCleanAfterConsolidation() {
       VectorSchemaRoot a = createIntBatch(1, 2, 3);
       VectorSchemaRoot b = createIntBatch(4, 5, 6);
-      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a, b));
       closeAll(result);
       assertEquals(0, allocator.getAllocatedMemory());
     }
@@ -742,8 +736,7 @@ class BatchConsolidationTest {
       VectorSchemaRoot a2 = createIntBatch(3, 4);
       VectorSchemaRoot b = createStringBatch("x");
       VectorSchemaRoot a3 = createIntBatch(5, 6);
-      List<VectorSchemaRoot> result =
-          BatchConsolidator.consolidate(List.of(a1, a2, b, a3), allocator);
+      List<VectorSchemaRoot> result = BatchConsolidator.consolidate(List.of(a1, a2, b, a3));
       closeAll(result);
       assertEquals(0, allocator.getAllocatedMemory());
     }
