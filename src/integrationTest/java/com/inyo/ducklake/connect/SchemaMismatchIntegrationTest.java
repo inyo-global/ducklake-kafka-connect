@@ -36,6 +36,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.EnabledIfDockerAvailable;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.kafka.KafkaContainer;
+import org.testcontainers.shaded.org.awaitility.Awaitility;
 
 /**
  * Reproduces the VectorAppender type mismatch bug that occurs when records in separate poll cycles
@@ -154,7 +155,7 @@ class SchemaMismatchIntegrationTest {
     embeddedKafkaConnect.ensureConnectorRunning(connectorName);
 
     // Wait for connector to be actively polling
-    Thread.sleep(3000);
+    IntegrationTestUtils.awaitConnectorRunning(embeddedKafkaConnect, connectorName);
 
     var props = new Properties();
     props.put("bootstrap.servers", kafkaContainer.getBootstrapServers());
@@ -168,8 +169,9 @@ class SchemaMismatchIntegrationTest {
       System.out.println("Sent first record (value=string)");
     }
 
-    // Wait for the first record to be consumed in its own poll cycle (creating a VarChar batch)
-    Thread.sleep(3000);
+    // Brief pause so the first record is consumed in its own poll cycle (creating a VarChar batch)
+    // before the second record with a different schema arrives.
+    Thread.sleep(1000);
 
     // Send second record: "value" is a number (different Arrow type)
     try (KafkaProducer<String, String> producer = new KafkaProducer<>(props)) {
@@ -178,24 +180,40 @@ class SchemaMismatchIntegrationTest {
       System.out.println("Sent second record (value=number)");
     }
 
-    // Wait for the time-based flush to trigger (8s interval) and complete.
+    // Wait for the time-based flush (8s interval) to trigger and complete.
     // The flush will attempt to consolidate the two batches with mismatched schemas.
     // Before the fix: task crashes with VectorBatchAppender type mismatch.
     // After the fix: BatchConsolidator writes them as separate runs and task stays RUNNING.
-    Thread.sleep(15000);
+    //
+    // We poll for data to appear in the table, which proves a flush completed successfully.
+    // We check for >= 1 row rather than exactly 2 because the two records have different
+    // schemas and may be flushed in separate cycles.
+    var factory = IntegrationTestUtils.connectionFactory(topicName, tableName, postgres, minio);
+    Awaitility.await("Schema-mismatched data to be flushed and written")
+        .atMost(Duration.ofSeconds(30))
+        .pollInterval(Duration.ofSeconds(2))
+        .ignoreExceptions()
+        .until(
+            () -> {
+              factory.create();
+              try (var conn = factory.getConnection();
+                  var st = conn.createStatement();
+                  var rs = st.executeQuery("SELECT count(*) FROM lake.main." + tableName)) {
+                rs.next();
+                return rs.getInt(1) >= 1;
+              } finally {
+                factory.close();
+              }
+            });
 
-    // Verify the task is still running
+    // Verify the task is still running (not in a failed state from the consolidation attempt)
     var status = embeddedKafkaConnect.getConnectorStatus(connectorName);
     assertEquals("RUNNING", status.connector().state(), "Connector should still be RUNNING");
-
     for (ConnectorStateInfo.TaskState task : status.tasks()) {
-      if ("FAILED".equals(task.state())) {
-        System.err.println("Task " + task.id() + " FAILED with trace:\n" + task.trace());
-      }
       assertEquals(
           "RUNNING",
           task.state(),
-          "Task " + task.id() + " should be RUNNING but was FAILED. Trace: " + task.trace());
+          "Task " + task.id() + " should be RUNNING. Trace: " + task.trace());
     }
   }
 }
