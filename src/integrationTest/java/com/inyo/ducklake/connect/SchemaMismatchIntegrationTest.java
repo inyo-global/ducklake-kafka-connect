@@ -39,8 +39,9 @@ import org.testcontainers.kafka.KafkaContainer;
 /**
  * Reproduces the VectorAppender type mismatch bug that occurs when records in separate poll cycles
  * have different types for the same field (e.g., a field that is sometimes a string, sometimes a
- * number). Before the fix, consolidateBatches would crash the task. After the fix, it falls back to
- * writing batches individually.
+ * number). Before the fix, consolidateBatches would crash the task. After the fix,
+ * BatchConsolidator groups contiguous compatible batches and writes incompatible batches as separate
+ * runs.
  */
 @Testcontainers
 class SchemaMismatchIntegrationTest {
@@ -88,9 +89,9 @@ class SchemaMismatchIntegrationTest {
   /**
    * Sends records where the same field has different JSON types across separate poll cycles. With
    * flush.size > number of records, records from separate polls produce separate Arrow batches with
-   * different schemas. When the time-based flush triggers, consolidateBatches attempts to merge
-   * them. Before the fix, VectorBatchAppender would throw. After the fix, batches are written
-   * individually as a fallback.
+   * different schemas. When the time-based flush triggers, BatchConsolidator groups them into
+   * contiguous runs by compatible schema and writes each run separately. Before the fix,
+   * VectorBatchAppender would throw on the type mismatch.
    */
   @Test
   void schemaMismatchDuringConsolidation() throws Exception {
@@ -178,7 +179,7 @@ class SchemaMismatchIntegrationTest {
     // Wait for the time-based flush to trigger (8s interval) and complete.
     // The flush will attempt to consolidate the two batches with mismatched schemas.
     // Before the fix: task crashes with VectorBatchAppender type mismatch.
-    // After the fix: falls back to individual writes and task stays RUNNING.
+    // After the fix: BatchConsolidator writes them as separate runs and task stays RUNNING.
     Thread.sleep(15000);
 
     // Verify the task is still running
