@@ -111,13 +111,9 @@ Validation is in `DucklakeSinkConfig.validateDataPath()`.
 
 This project requires **Java 17-21** for local development. The google-java-format plugin used by Spotless doesn't work with Java 22+.
 
-Use [mise](https://mise.jdx.dev/) to manage Java versions:
+Use [flox](https://flox.dev/) to manage the development environment:
 ```bash
-# Install Java 21
-mise use java@21
-
-# Or set for this project only
-echo "java 21" >> .mise.toml
+flox activate
 ```
 
 CI uses Java 17.
