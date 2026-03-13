@@ -109,14 +109,16 @@ Validation is in `DucklakeSinkConfig.validateDataPath()`.
 
 ## Java Version
 
-This project requires **Java 17-21** for local development. The google-java-format plugin used by Spotless doesn't work with Java 22+.
+The project targets **Java 17** (Kafka Connect's runtime JDK). `sourceCompatibility` and `targetCompatibility` are set to 17 in `build.gradle.kts`.
+
+Local development requires **Java 17-21**. The google-java-format plugin used by Spotless doesn't work with Java 22+.
 
 Use [flox](https://flox.dev/) to manage the development environment:
 ```bash
 flox activate
 ```
 
-CI uses Java 17.
+CI builds with Java 21.
 
 ## Code Style
 - Uses Spotless with Google Java Format

@@ -6,6 +6,11 @@ plugins {
     id("com.diffplug.spotless") version "8.2.1"
 }
 
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
 group = "com.inyo"
 version = "1.0-SNAPSHOT"
 
